@@ -1,0 +1,19 @@
+{
+  "functions": {
+    "api/**": {
+      "runtime": "nodejs18.x"
+    }
+  },
+  "routes": [
+    {
+      "src": "/api/stripe/webhook",
+      "dest": "/api/stripe/webhook",
+      "methods": ["POST"]
+    },
+    {
+      "src": "/stripe/webhook",
+      "dest": "/api/stripe/webhook",
+      "methods": ["POST"]
+    }
+  ]
+}

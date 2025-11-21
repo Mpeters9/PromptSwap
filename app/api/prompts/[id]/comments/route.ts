@@ -1,0 +1,81 @@
+import type { NextRequest } from 'next/server';
+import { NextResponse } from 'next/server';
+import { createClient } from '@supabase/supabase-js';
+
+export const runtime = 'nodejs';
+
+const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+const supabaseServiceKey = process.env.NEXT_PRIVATE_SUPABASE_SERVICE_ROLE_KEY;
+
+if (!supabaseUrl || !supabaseServiceKey) {
+  throw new Error('Supabase URL and service role key are required for comments API.');
+}
+
+const supabaseAdmin = createClient(supabaseUrl, supabaseServiceKey);
+
+function getToken(req: NextRequest) {
+  const authHeader = req.headers.get('authorization');
+  if (!authHeader) return null;
+  return authHeader.replace('Bearer ', '').trim();
+}
+
+async function getUserId(req: NextRequest) {
+  const token = getToken(req);
+  if (!token) return null;
+  const { data, error } = await supabaseAdmin.auth.getUser(token);
+  if (error || !data?.user) return null;
+  return data.user.id;
+}
+
+const sanitize = (value: string) =>
+  value.replace(/</g, '&lt;').replace(/>/g, '&gt;').slice(0, 2000); // trim to practical length
+
+export async function GET(_req: NextRequest, { params }: { params: { id: string } }) {
+  try {
+    const { data, error } = await supabaseAdmin
+      .from('prompt_comments')
+      .select('id, user_id, comment, created_at')
+      .eq('prompt_id', params.id)
+      .order('created_at', { ascending: false });
+
+    if (error) throw error;
+    return NextResponse.json({ comments: data ?? [] });
+  } catch (err: any) {
+    return NextResponse.json({ error: err.message ?? 'Failed to fetch comments' }, { status: 500 });
+  }
+}
+
+export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
+  const userId = await getUserId(req);
+  if (!userId) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+
+  let body: { comment?: string };
+  try {
+    body = await req.json();
+  } catch {
+    return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 });
+  }
+
+  const comment = sanitize((body.comment ?? '').trim());
+  if (!comment) {
+    return NextResponse.json({ error: 'Comment is required' }, { status: 400 });
+  }
+
+  try {
+    const { data, error } = await supabaseAdmin
+      .from('prompt_comments')
+      .insert({
+        prompt_id: params.id,
+        user_id: userId,
+        comment,
+      })
+      .select('id, user_id, comment, created_at')
+      .single();
+
+    if (error) throw error;
+
+    return NextResponse.json({ comment: data });
+  } catch (err: any) {
+    return NextResponse.json({ error: err.message ?? 'Failed to add comment' }, { status: 500 });
+  }
+}
