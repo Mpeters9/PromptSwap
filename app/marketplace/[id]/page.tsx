@@ -118,7 +118,12 @@ export default function PromptDetailPage() {
 
         <div className="mt-6">
           {userId ? (
-            <BuyButton promptId={prompt.id} title={prompt.title} price={Number(prompt.price ?? 0)} />
+            <BuyButton
+              promptId={prompt.id}
+              title={prompt.title}
+              price={Number(prompt.price ?? 0)}
+              userId={userId}
+            />
           ) : (
             <button
               type="button"

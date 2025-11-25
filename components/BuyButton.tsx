@@ -6,6 +6,7 @@ type Props = {
   promptId: string;
   title: string;
   price: number; // dollars
+  userId?: string;
 };
 
 type CheckoutResponse = {
@@ -13,7 +14,7 @@ type CheckoutResponse = {
   error?: string;
 };
 
-export default function BuyButton({ promptId, title, price }: Props) {
+export default function BuyButton({ promptId, title, price, userId }: Props) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -34,6 +35,7 @@ export default function BuyButton({ promptId, title, price }: Props) {
         prompt_id: promptId,
         title,
         price: priceInCents,
+        user_id: userId,
       };
 
       console.log('Creating checkout session with payload', payload);
