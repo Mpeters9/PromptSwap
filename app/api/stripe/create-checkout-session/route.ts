@@ -1,54 +1,45 @@
 import { NextRequest, NextResponse } from 'next/server';
 import Stripe from 'stripe';
-import { createClient } from '@supabase/supabase-js';
 
 export const runtime = 'nodejs';
 
-type Prompt = { id: string; title?: string | null; price?: number | null };
-
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-const supabaseServiceKey = process.env.NEXT_PRIVATE_SUPABASE_SERVICE_ROLE_KEY;
 const stripeSecretKey = process.env.STRIPE_SECRET_KEY;
-const siteUrl = process.env.NEXT_PUBLIC_SITE_URL || 'http://localhost:3000';
+const siteUrl = (process.env.NEXT_PUBLIC_SITE_URL || 'http://localhost:3000').replace(/\/$/, '');
 
 if (!stripeSecretKey) {
   throw new Error('STRIPE_SECRET_KEY must be set.');
 }
 
-const supabase =
-  supabaseUrl && supabaseServiceKey ? createClient(supabaseUrl, supabaseServiceKey) : null;
 const stripe = new Stripe(stripeSecretKey, { apiVersion: '2023-08-16' });
 
-async function getPrompt(promptId: string): Promise<Prompt | null> {
-  if (!supabase) {
-    // Mocked prompt if Supabase is not configured.
-    return { id: promptId, title: `Prompt ${promptId}`, price: 5 };
-  }
-  const { data, error } = await supabase
-    .from('prompts')
-    .select('id, title, price')
-    .eq('id', promptId)
-    .single();
-  if (error) return null;
-  return data as Prompt;
-}
+type CreateSessionBody = {
+  prompt_id?: string;
+  title?: string;
+  price?: number;
+  user_id?: string;
+};
 
 export async function POST(req: NextRequest) {
   try {
-    const { promptId } = (await req.json()) as { promptId?: string };
-    if (!promptId) {
-      return NextResponse.json({ error: 'promptId is required' }, { status: 400 });
+    const { prompt_id, title, price, user_id } = (await req.json()) as CreateSessionBody;
+    console.log('Create checkout payload', { prompt_id, title, price, user_id });
+
+    if (!prompt_id || !title || price === undefined || price === null) {
+      return NextResponse.json(
+        { error: 'prompt_id, title, and price are required' },
+        { status: 400 },
+      );
     }
 
-    const prompt = await getPrompt(promptId);
-    if (!prompt) {
-      return NextResponse.json({ error: 'Prompt not found' }, { status: 404 });
+    const numericPrice = Number(price);
+    if (!Number.isFinite(numericPrice) || numericPrice <= 0) {
+      return NextResponse.json({ error: 'Price must be a positive number.' }, { status: 400 });
     }
 
-    const price = prompt.price ?? 5; // fallback mock price in USD
-    if (Number(price) <= 0) {
-      return NextResponse.json({ error: 'Prompt price is invalid' }, { status: 400 });
-    }
+    // Ensure price is in cents; if a non-integer is provided, treat it as dollars.
+    const priceInCents = Number.isInteger(numericPrice)
+      ? numericPrice
+      : Math.round(numericPrice * 100);
 
     const session = await stripe.checkout.sessions.create({
       payment_method_types: ['card'],
@@ -57,24 +48,21 @@ export async function POST(req: NextRequest) {
         {
           price_data: {
             currency: 'usd',
-            product_data: {
-              name: prompt.title ?? `Prompt ${prompt.id}`,
-            },
-            unit_amount: Math.round(Number(price) * 100), // cents
+            product_data: { name: title },
+            unit_amount: priceInCents,
           },
           quantity: 1,
         },
       ],
-      success_url: `${siteUrl}/success?session_id={CHECKOUT_SESSION_ID}`,
-      cancel_url: `${siteUrl}/`,
-      metadata: {
-        promptId: prompt.id,
-      },
+      success_url: `${siteUrl}/checkout/success?prompt_id=${encodeURIComponent(prompt_id)}`,
+      cancel_url: `${siteUrl}/marketplace/${encodeURIComponent(prompt_id)}`,
+      metadata: { prompt_id, user_id },
     });
 
+    console.log('Stripe session created', { id: session.id, url: session.url });
     return NextResponse.json({ url: session.url });
   } catch (err: any) {
     console.error('Checkout session failed', err);
-    return NextResponse.json({ error: 'Checkout session failed' }, { status: 500 });
+    return NextResponse.json({ error: err?.message || 'Checkout session failed' }, { status: 500 });
   }
 }

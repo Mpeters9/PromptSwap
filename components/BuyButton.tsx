@@ -4,29 +4,62 @@ import { useState } from 'react';
 
 type Props = {
   promptId: string;
-  price: number;
+  title: string;
+  price: number; // dollars
 };
 
-export default function BuyButton({ promptId, price }: Props) {
+type CheckoutResponse = {
+  url?: string;
+  error?: string;
+};
+
+export default function BuyButton({ promptId, title, price }: Props) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const handleClick = async () => {
+    const priceInCents = Math.round(Number(price) * 100);
+    if (!promptId || !title || !Number.isFinite(priceInCents) || priceInCents <= 0) {
+      const message = 'Missing or invalid checkout details.';
+      console.error(message, { promptId, title, priceInCents });
+      setError(message);
+      alert(message);
+      return;
+    }
+
     setLoading(true);
     setError(null);
     try {
+      const payload = {
+        prompt_id: promptId,
+        title,
+        price: priceInCents,
+      };
+
+      console.log('Creating checkout session with payload', payload);
+
       const res = await fetch('/api/stripe/create-checkout-session', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ promptId }),
+        body: JSON.stringify(payload),
       });
-      const data = await res.json();
+
+      const data = (await res.json()) as CheckoutResponse;
+      console.log('Checkout session response', { status: res.status, data });
       if (!res.ok || !data?.url) {
-        throw new Error(data?.error || 'Failed to start checkout');
+        const message = data?.error ?? 'Failed to start checkout';
+        console.error('Checkout session failed', { status: res.status, data });
+        setError(message);
+        alert(message);
+        return;
       }
+
       window.location.href = data.url;
     } catch (err: any) {
-      setError(err.message ?? 'Unable to start checkout');
+      console.error('Checkout request error', err);
+      const message = err?.message ?? 'Unable to start checkout';
+      setError(message);
+      alert(message);
     } finally {
       setLoading(false);
     }
