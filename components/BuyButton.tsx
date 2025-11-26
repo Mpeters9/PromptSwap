@@ -24,7 +24,6 @@ export default function BuyButton({ promptId, title, price, userId }: Props) {
       const message = 'Missing or invalid checkout details.';
       console.error(message, { promptId, title, priceInCents });
       setError(message);
-      alert(message);
       return;
     }
 
@@ -52,7 +51,6 @@ export default function BuyButton({ promptId, title, price, userId }: Props) {
         const message = data?.error ?? 'Failed to start checkout';
         console.error('Checkout session failed', { status: res.status, data });
         setError(message);
-        alert(message);
         return;
       }
 
@@ -61,7 +59,6 @@ export default function BuyButton({ promptId, title, price, userId }: Props) {
       console.error('Checkout request error', err);
       const message = err?.message ?? 'Unable to start checkout';
       setError(message);
-      alert(message);
     } finally {
       setLoading(false);
     }
@@ -73,9 +70,16 @@ export default function BuyButton({ promptId, title, price, userId }: Props) {
         type="button"
         onClick={handleClick}
         disabled={loading}
-        className="inline-flex items-center justify-center rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 disabled:cursor-not-allowed disabled:bg-blue-300"
+        className="inline-flex items-center justify-center gap-2 rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
       >
-        {loading ? 'Processing...' : `Buy for $${price.toFixed(2)}`}
+        {loading ? (
+          <>
+            <div className="animate-spin border-2 border-white border-t-transparent rounded-full w-4 h-4" />
+            <span className="sr-only">Processing checkout</span>
+          </>
+        ) : (
+          `Buy for $${price.toFixed(2)}`
+        )}
       </button>
       {error && <span className="text-xs text-red-600">{error}</span>}
     </div>

@@ -1,21 +1,43 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 
 import { supabase } from '@/lib/supabase-client';
 
-type PurchaseRow = { amount: number | null };
-type ProfileRow = { stripe_account_id: string | null };
+type ProfileRow = {
+  stripe_account_id?: string | null;
+  connected_account_id?: string | null;
+};
+
+type SaleRow = {
+  id: string;
+  amount: number | null;
+  created_at: string;
+  buyer_email?: string | null;
+  prompts: {
+    title: string | null;
+    price: number | null;
+  } | null;
+};
 
 export default function DashboardPayoutsPage() {
   const router = useRouter();
-  const [earnings, setEarnings] = useState<number | null>(null);
+  const [accountId, setAccountId] = useState<string | null>(null);
+  const [sales, setSales] = useState<SaleRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [accountId, setAccountId] = useState<string | null>(null);
-  const [connectLoading, setConnectLoading] = useState(false);
+  const [connecting, setConnecting] = useState(false);
   const [connectError, setConnectError] = useState<string | null>(null);
+
+  const earnings = useMemo(() => {
+    const total = sales.reduce((sum, sale) => sum + (Number(sale.amount) || 0), 0);
+    return {
+      total,
+      pending: 0,
+      available: total,
+    };
+  }, [sales]);
 
   useEffect(() => {
     const load = async () => {
@@ -23,16 +45,16 @@ export default function DashboardPayoutsPage() {
       setError(null);
 
       const { data: sessionData, error: sessionError } = await supabase.auth.getSession();
-      if (sessionError || !sessionData.session?.user) {
+      const userId = sessionData.session?.user?.id;
+
+      if (sessionError || !userId) {
         router.replace('/auth/login');
         return;
       }
-      const userId = sessionData.session.user.id;
 
-      // Fetch profile for Stripe Connect status
       const { data: profileData, error: profileErr } = await supabase
         .from<ProfileRow>('profiles')
-        .select('stripe_account_id')
+        .select('stripe_account_id, connected_account_id')
         .eq('id', userId)
         .single();
 
@@ -42,19 +64,21 @@ export default function DashboardPayoutsPage() {
         return;
       }
 
-      setAccountId(profileData?.stripe_account_id ?? null);
+      setAccountId(profileData?.connected_account_id ?? profileData?.stripe_account_id ?? null);
 
-      // Earnings summary from purchases (if amount is stored)
-      const { data, error: fetchErr } = await supabase.from<PurchaseRow>('purchases').select('amount');
+      const { data: salesData, error: salesErr } = await supabase
+        .from<SaleRow>('purchases')
+        .select('id, amount, buyer_email, created_at, prompts(title, price)')
+        .eq('seller_id', userId)
+        .order('created_at', { ascending: false });
 
-      if (fetchErr) {
-        setError(fetchErr.message);
+      if (salesErr) {
+        setError(salesErr.message);
         setLoading(false);
         return;
       }
 
-      const total = data?.reduce((sum, row) => sum + (Number(row.amount) || 0), 0) ?? 0;
-      setEarnings(total);
+      setSales(salesData ?? []);
       setLoading(false);
     };
 
@@ -62,7 +86,7 @@ export default function DashboardPayoutsPage() {
   }, [router]);
 
   const handleConnect = async () => {
-    setConnectLoading(true);
+    setConnecting(true);
     setConnectError(null);
     try {
       const res = await fetch('/api/stripe/connect', { method: 'POST' });
@@ -72,65 +96,123 @@ export default function DashboardPayoutsPage() {
       }
       window.location.href = data.url;
     } catch (err: any) {
-      setConnectError(err.message ?? 'Failed to start Stripe Connect.');
+      setConnectError(err?.message || 'Failed to start Stripe Connect.');
     } finally {
-      setConnectLoading(false);
+      setConnecting(false);
     }
   };
 
+  const formatCurrency = (value: number | null | undefined) =>
+    `$${Number(value || 0).toFixed(2)}`;
+
+  const formatDate = (iso: string) => {
+    const d = new Date(iso);
+    return Number.isNaN(d.getTime()) ? 'Unknown date' : d.toLocaleDateString();
+  };
+
   return (
-    <div className="mx-auto max-w-4xl px-4 py-10">
-      <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-        <h1 className="text-2xl font-semibold text-slate-900">Payouts</h1>
-        <p className="mt-2 text-sm text-slate-600">Payouts feature coming soon.</p>
+    <div className="mx-auto max-w-5xl px-4 py-10">
+      <div className="mb-8 flex flex-col gap-2">
+        <h1 className="text-3xl font-semibold text-slate-900">Payouts</h1>
+        <p className="text-sm text-slate-600">
+          Track your Stripe connection, earnings, and recent prompt sales.
+        </p>
+      </div>
 
-        {error && (
-          <div className="mt-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
-            {error}
-          </div>
-        )}
-        {connectError && (
-          <div className="mt-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
-            {connectError}
-          </div>
-        )}
+      {error && (
+        <div className="mb-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 shadow-sm">
+          {error}
+        </div>
+      )}
+      {connectError && (
+        <div className="mb-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 shadow-sm">
+          {connectError}
+        </div>
+      )}
 
-        {loading ? (
-          <div className="mt-4 text-sm text-slate-600">Loading summary...</div>
-        ) : (
-          <div className="mt-6 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700">
-            <p className="text-xs uppercase text-slate-500">Total Earnings (All time)</p>
-            <p className="mt-1 text-2xl font-semibold text-slate-900">
-              {earnings !== null ? `$${earnings.toFixed(2)}` : '$0.00'}
-            </p>
-            <p className="mt-1 text-xs text-slate-500">Creator payouts will be available soon.</p>
-          </div>
-        )}
-
-        <div className="mt-6 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700">
-          <div className="flex flex-wrap items-center justify-between gap-3">
+      <div className="grid gap-6 md:grid-cols-2">
+        <div className="rounded-xl bg-white p-6 shadow-sm">
+          <div className="flex items-start justify-between">
             <div>
               <p className="text-xs uppercase text-slate-500">Stripe Connect</p>
-              <p className="mt-1 font-semibold text-slate-900">
-                {accountId ? 'Connected' : 'Not connected'}
+              <h2 className="text-xl font-semibold text-slate-900">
+                {accountId ? 'Connected' : 'Not Connected'}
+              </h2>
+              <p className="mt-1 text-sm text-slate-600">
+                {accountId ? `Account: ${accountId}` : 'Connect to receive payouts.'}
               </p>
-              {accountId && (
-                <p className="text-xs text-slate-500">Account ID: {accountId}</p>
-              )}
             </div>
             <button
               type="button"
               onClick={handleConnect}
-              disabled={connectLoading}
-              className="inline-flex items-center justify-center rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-indigo-700 disabled:cursor-not-allowed disabled:bg-indigo-300"
+              disabled={connecting}
+              className="inline-flex items-center justify-center rounded-md bg-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60"
             >
-              {accountId ? 'Reconnect Stripe' : connectLoading ? 'Connecting...' : 'Connect Stripe Account'}
+              {connecting ? 'Connecting...' : 'Connect Stripe Account'}
             </button>
           </div>
-          <p className="mt-2 text-xs text-slate-500">
-            Connect your Stripe account to receive payouts. This section will show payout history in the future.
-          </p>
         </div>
+
+        <div className="rounded-xl bg-white p-6 shadow-sm">
+          <p className="text-xs uppercase text-slate-500">Earnings</p>
+          <div className="mt-3 grid grid-cols-1 gap-4 sm:grid-cols-3">
+            <div>
+              <p className="text-sm text-slate-600">Total Earned</p>
+              <p className="text-2xl font-semibold text-slate-900">{formatCurrency(earnings.total)}</p>
+            </div>
+            <div>
+              <p className="text-sm text-slate-600">Pending Payouts</p>
+              <p className="text-2xl font-semibold text-slate-900">
+                {formatCurrency(earnings.pending)}
+              </p>
+            </div>
+            <div>
+              <p className="text-sm text-slate-600">Available Balance</p>
+              <p className="text-2xl font-semibold text-slate-900">
+                {formatCurrency(earnings.available)}
+              </p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div className="mt-6 rounded-xl bg-white p-6 shadow-sm">
+        <div className="mb-4 flex items-center justify-between">
+          <h3 className="text-lg font-semibold text-slate-900">Recent Sales</h3>
+          <p className="text-xs text-slate-500">Sorted by newest</p>
+        </div>
+
+        {loading ? (
+          <div className="space-y-3">
+            {[1, 2, 3].map((i) => (
+              <div key={i} className="flex items-center justify-between border-b border-slate-100 pb-3 last:border-b-0">
+                <div className="space-y-2">
+                  <div className="h-4 w-40 animate-pulse rounded bg-slate-200" />
+                  <div className="h-3 w-24 animate-pulse rounded bg-slate-200" />
+                </div>
+                <div className="h-4 w-16 animate-pulse rounded bg-slate-200" />
+              </div>
+            ))}
+          </div>
+        ) : sales.length === 0 ? (
+          <p className="text-sm text-slate-600">No sales yet.</p>
+        ) : (
+          <div className="divide-y divide-slate-100">
+            {sales.map((sale) => (
+              <div
+                key={sale.id}
+                className="grid grid-cols-1 gap-2 py-3 text-sm text-slate-800 sm:grid-cols-4 sm:items-center"
+              >
+                <div className="font-semibold text-slate-900">
+                  {sale.prompts?.title || 'Prompt'}
+                </div>
+                <div>{formatCurrency(sale.prompts?.price ?? sale.amount ?? 0)}</div>
+                <div className="text-slate-600">{sale.buyer_email || '—'}</div>
+                <div className="text-slate-500">{formatDate(sale.created_at)}</div>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
     </div>
   );

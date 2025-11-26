@@ -110,7 +110,7 @@ export default function UploadPage() {
     }
 
     setStatus('Saving prompt...');
-    const { data, error: insertError } = await supabase
+    const { data: result, error: insertError } = await supabase
       .from('prompts')
       .insert({
         user_id: user.id,
@@ -122,18 +122,33 @@ export default function UploadPage() {
         preview_image: previewUrl,
         is_public: false,
       })
-      .select('id')
+      .select()
       .single();
 
-    if (insertError) {
-      setError(`Failed to save prompt: ${insertError.message}`);
+    if (!result || insertError) {
+      setError(`Failed to save prompt: ${insertError?.message || 'Unknown error'}`);
+      setSubmitting(false);
+      setStatus(null);
+      return;
+    }
+
+    // Upload prompt file to storage
+    const promptTextFile = new Blob([form.promptText.trim()], { type: 'text/plain' });
+    const { error: uploadPromptError } = await supabase.storage
+      .from('prompts')
+      .upload(`${result.id}.txt`, promptTextFile, {
+        upsert: true,
+      });
+
+    if (uploadPromptError) {
+      setError(`Prompt saved, but failed to upload file: ${uploadPromptError.message}`);
       setSubmitting(false);
       setStatus(null);
       return;
     }
 
     setStatus('Prompt created! Redirecting...');
-    router.push(`/prompts/${data?.id}`);
+    router.push(`/prompts/${result.id}`);
   };
 
   if (!loading && !user) {
