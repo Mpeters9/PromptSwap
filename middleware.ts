@@ -5,6 +5,16 @@ const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL?.trim();
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY?.trim();
 const projectRef = supabaseUrl?.replace(/^https?:\/\//, '').split('.')[0];
 
+const RATE_LIMIT = 20;
+const RATE_LIMIT_WINDOW_MS = 60_000;
+const rateLimitStore = new Map<string, number[]>();
+
+function getClientIp(req: NextRequest) {
+  const xfwd = req.headers.get('x-forwarded-for');
+  if (xfwd) return xfwd.split(',')[0].trim();
+  return req.ip ?? 'unknown';
+}
+
 function extractAccessToken(req: NextRequest): string | null {
   if (!projectRef) return null;
   const cookieName = `sb-${projectRef}-auth-token`;
@@ -24,6 +34,24 @@ function extractAccessToken(req: NextRequest): string | null {
 }
 
 export async function middleware(req: NextRequest) {
+  const path = req.nextUrl.pathname;
+  const isApi = path.startsWith('/api/');
+
+  if (isApi) {
+    const ip = getClientIp(req);
+    const now = Date.now();
+    const windowStart = now - RATE_LIMIT_WINDOW_MS;
+    const history = rateLimitStore.get(ip)?.filter((ts) => ts > windowStart) ?? [];
+
+    if (history.length >= RATE_LIMIT) {
+      return NextResponse.json({ error: 'Too many requests' }, { status: 429 });
+    }
+
+    history.push(now);
+    rateLimitStore.set(ip, history);
+    return NextResponse.next();
+  }
+
   if (!supabaseUrl || !supabaseAnonKey) {
     console.warn('Supabase env vars missing; skipping auth middleware.');
     return NextResponse.next();
@@ -60,5 +88,5 @@ export async function middleware(req: NextRequest) {
 }
 
 export const config = {
-  matcher: ['/dashboard/:path*', '/account/:path*'],
+  matcher: ['/api/:path*', '/dashboard/:path*', '/account/:path*'],
 };

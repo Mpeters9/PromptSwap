@@ -136,6 +136,7 @@ export default function CreatorPage() {
               title={prompt.title}
               description={prompt.description ?? ''}
               price={Number(prompt.price ?? 0)}
+              likes={0}
               authorName={profile?.username || undefined}
               createdAt={prompt.created_at ? new Date(prompt.created_at) : undefined}
             />

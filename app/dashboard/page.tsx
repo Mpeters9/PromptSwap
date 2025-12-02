@@ -1,214 +1,271 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import { useRouter } from 'next/navigation';
+import Link from 'next/link';
+import { motion } from 'framer-motion';
 
-import LogoutButton from '@/components/LogoutButton';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { EmptyState } from '@/components/ui/EmptyState';
+import { Skeleton } from '@/components/ui/skeleton';
 import { supabase } from '@/lib/supabase-client';
 
-type PromptRow = { id: string };
+type PromptRow = { id: string; title: string; price: number | null; created_at: string };
 type PurchaseRow = {
   id: string;
   prompt_id: string | null;
-  amount: number | null;
-  buyer_id: string | null;
+  price: number | null;
   created_at: string;
   prompts: { title: string | null } | null;
 };
-type ProfileRow = { stripe_account_id: string | null };
-
-type Stats = {
-  promptCount: number;
-  salesCount: number;
-  earnings: number;
-};
 
 export default function DashboardPage() {
-  const router = useRouter();
   const [email, setEmail] = useState<string | null>(null);
-  const [stats, setStats] = useState<Stats>({ promptCount: 0, salesCount: 0, earnings: 0 });
+  const [prompts, setPrompts] = useState<PromptRow[]>([]);
+  const [purchases, setPurchases] = useState<PurchaseRow[]>([]);
+  const [earnings, setEarnings] = useState<number>(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [recentSales, setRecentSales] = useState<PurchaseRow[]>([]);
-  const [stripeAccountId, setStripeAccountId] = useState<string | null>(null);
 
-  const overviewCards = useMemo(
-    () => [
-      { label: 'Prompts Uploaded', value: stats.promptCount.toString() },
-      { label: 'Total Sales', value: stats.salesCount.toString() },
-      { label: 'Total Earnings', value: `$${stats.earnings.toFixed(2)}` },
-    ],
-    [stats],
+  const totalSales = useMemo(
+    () => purchases.reduce((sum, row) => sum + (Number(row.price) || 0), 0),
+    [purchases],
   );
 
   useEffect(() => {
-    const loadDashboard = async () => {
+    const load = async () => {
       setLoading(true);
       setError(null);
 
       const { data: sessionData, error: sessionError } = await supabase.auth.getSession();
       if (sessionError || !sessionData.session?.user) {
-        router.replace('/auth/login');
+        setError('Please sign in to view your dashboard.');
+        setLoading(false);
         return;
       }
 
       const user = sessionData.session.user;
       setEmail(user.email ?? null);
 
-      // Fetch prompts count
-      const { count: promptCount, error: promptErr } = await supabase
-        .from<PromptRow>('prompts')
-        .select('id', { count: 'exact', head: true })
-        .eq('user_id', user.id);
+      const [{ data: promptData, error: promptErr }, { data: purchaseData, error: purchaseErr }] =
+        await Promise.all([
+          supabase
+            .from<PromptRow>('prompts')
+            .select('id, title, price, created_at')
+            .eq('user_id', user.id),
+          supabase
+            .from<PurchaseRow>('purchases')
+            .select('id, prompt_id, price, created_at, prompts(title)')
+            .eq('seller_id', user.id)
+            .order('created_at', { ascending: false }),
+        ]);
 
-      // Fetch purchases where this user is the seller
-      const { data: purchases, error: purchaseErr } = await supabase
-        .from<PurchaseRow>('purchases')
-        .select('id, prompt_id, amount, buyer_id, created_at, prompts(title)')
-        .eq('seller_id', user.id)
-        .order('created_at', { ascending: false })
-        .limit(10);
-
-      // Fetch stripe account status
-      const { data: profileData, error: profileErr } = await supabase
-        .from<ProfileRow>('profiles')
-        .select('stripe_account_id')
-        .eq('id', user.id)
-        .single();
-
-      if (promptErr || purchaseErr || profileErr) {
-        setError(
-          promptErr?.message || purchaseErr?.message || profileErr?.message || 'Failed to load dashboard.',
-        );
+      if (promptErr || purchaseErr) {
+        setError(promptErr?.message || purchaseErr?.message || 'Failed to load dashboard.');
         setLoading(false);
         return;
       }
 
-      const earnings =
-        purchases?.reduce((sum, row) => sum + (Number(row.amount) || 0), 0) ?? 0;
-
-      setStats({
-        promptCount: promptCount ?? 0,
-        salesCount: purchases?.length ?? 0,
-        earnings,
-      });
-      setRecentSales(purchases ?? []);
-      setStripeAccountId(profileData?.stripe_account_id ?? null);
+      setPrompts(promptData ?? []);
+      setPurchases(purchaseData ?? []);
+      setEarnings(
+        (purchaseData ?? []).reduce((sum, row) => sum + (Number(row.price) || 0), 0),
+      );
       setLoading(false);
     };
 
-    void loadDashboard();
-  }, [router]);
+    void load();
+  }, []);
 
   return (
-    <div className="mx-auto max-w-6xl px-4 py-10">
-      <div className="mb-6 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+    <div className="mx-auto max-w-6xl px-4 py-8">
+      <motion.div
+        className="mb-6 flex flex-wrap items-center justify-between gap-3"
+        initial={{ opacity: 0, y: 8 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.2, ease: 'easeOut' }}
+      >
         <div>
-          <p className="text-xs uppercase text-slate-500">Welcome</p>
-          <h1 className="text-2xl font-semibold text-slate-900">{email || 'Loading...'}</h1>
+          <p className="text-xs uppercase text-slate-500">Dashboard</p>
+          <h1 className="text-3xl font-semibold text-slate-900">
+            {loading ? <Skeleton className="h-7 w-40" /> : email || '—'}
+          </h1>
         </div>
-        <LogoutButton />
-      </div>
-
-      <div className="mb-6 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-        <nav className="flex flex-wrap gap-3 text-sm font-medium text-slate-700">
-          <a className="rounded-lg border border-transparent px-3 py-1 hover:border-slate-200 hover:bg-slate-50" href="/dashboard/prompts">
-            My Prompts
-          </a>
-          <a className="rounded-lg border border-transparent px-3 py-1 hover:border-slate-200 hover:bg-slate-50" href="/dashboard/upload">
-            Upload Prompt
-          </a>
-          <a className="rounded-lg border border-transparent px-3 py-1 hover:border-slate-200 hover:bg-slate-50" href="/dashboard/payouts">
-            Payouts
-          </a>
-          <a className="rounded-lg border border-transparent px-3 py-1 hover:border-slate-200 hover:bg-slate-50" href="/dashboard/settings">
-            Settings
-          </a>
-        </nav>
-      </div>
+        <div className="flex gap-3">
+          {loading ? (
+            <>
+              <Skeleton className="h-16 w-32 rounded-xl" />
+              <Skeleton className="h-16 w-32 rounded-xl" />
+            </>
+          ) : (
+            <>
+              <StatCard label="Earnings" value={`$${earnings.toFixed(2)}`} />
+              <StatCard label="Total Sales" value={`$${totalSales.toFixed(2)}`} />
+            </>
+          )}
+        </div>
+      </motion.div>
 
       {error && (
-        <div className="mb-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
-          {error}
-        </div>
+        <Card className="border-red-200 bg-red-50 dark:border-red-800 dark:bg-red-900/20">
+          <CardContent className="p-4 text-sm text-red-700 dark:text-red-200">{error}</CardContent>
+        </Card>
       )}
 
-      {loading ? (
-        <div className="rounded-2xl border border-slate-200 bg-white p-6 text-sm text-slate-600 shadow-sm">
-          Loading your dashboard...
-        </div>
-      ) : (
-        <>
-          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-            {overviewCards.map((card) => (
-              <div
-                key={card.label}
-                className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm"
-              >
-                <p className="text-xs uppercase text-slate-500">{card.label}</p>
-                <p className="mt-2 text-2xl font-semibold text-slate-900">{card.value}</p>
-              </div>
-            ))}
-          </div>
+      <Tabs defaultValue="prompts" className="mt-4">
+        <TabsList>
+          <TabsTrigger value="prompts">My Prompts</TabsTrigger>
+          <TabsTrigger value="purchases">Purchases</TabsTrigger>
+          <TabsTrigger value="earnings">Earnings</TabsTrigger>
+        </TabsList>
 
-          <div className="mt-6 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <h2 className="text-lg font-semibold text-slate-900">Recent Sales</h2>
-              <a className="text-sm font-semibold text-indigo-600 hover:text-indigo-700" href="/dashboard/payouts">
-                View payouts
-              </a>
-            </div>
-            {recentSales.length === 0 ? (
-              <p className="mt-3 text-sm text-slate-600">No sales yet.</p>
-            ) : (
-              <div className="mt-4 overflow-hidden rounded-xl border border-slate-200">
-                <table className="min-w-full divide-y divide-slate-200 text-sm">
-                  <thead className="bg-slate-50 text-xs font-semibold uppercase text-slate-500">
-                    <tr>
-                      <th className="px-4 py-3 text-left">Prompt</th>
-                      <th className="px-4 py-3 text-left">Buyer</th>
-                      <th className="px-4 py-3 text-left">Amount</th>
-                      <th className="px-4 py-3 text-left">Date</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-200 bg-white">
-                    {recentSales.map((sale) => (
-                      <tr key={sale.id} className="hover:bg-slate-50">
-                        <td className="px-4 py-3 text-slate-900">
-                          {sale.prompts?.title ?? 'Prompt'}
-                        </td>
-                        <td className="px-4 py-3 text-slate-700">{sale.buyer_id ?? '—'}</td>
-                        <td className="px-4 py-3 text-slate-700">
-                          {sale.amount ? `$${Number(sale.amount).toFixed(2)}` : '$0.00'}
-                        </td>
-                        <td className="px-4 py-3 text-slate-600">
-                          {new Date(sale.created_at).toLocaleString()}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </div>
+        <TabsContent value="prompts" className="mt-4">
+          <Card className="border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900">
+            <CardHeader className="flex flex-row items-center justify-between">
+              <CardTitle>My Prompts</CardTitle>
+              <Link href="/dashboard/upload" className="text-sm font-semibold text-indigo-600 hover:underline">
+                Upload new
+              </Link>
+            </CardHeader>
+            <CardContent>
+              {loading ? (
+                <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                  {[1, 2, 3, 4].map((i) => (
+                    <Card key={i} className="border-slate-200 dark:border-slate-800">
+                      <CardContent className="p-3 space-y-2">
+                        <Skeleton className="h-4 w-2/3" />
+                        <Skeleton className="h-3 w-24" />
+                        <Skeleton className="h-4 w-16" />
+                      </CardContent>
+                    </Card>
+                  ))}
+                </div>
+              ) : prompts.length === 0 ? (
+                <EmptyState title="No prompts yet" description="Upload your first prompt to get started." />
+              ) : (
+                <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                  {prompts.map((prompt) => (
+                    <div key={prompt.id} className="rounded-lg border border-slate-200 p-3 dark:border-slate-800">
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <p className="text-sm font-semibold text-slate-900 dark:text-slate-100">{prompt.title}</p>
+                          <p className="text-xs text-slate-500">
+                            {new Date(prompt.created_at).toLocaleDateString()}
+                          </p>
+                        </div>
+                        <p className="text-sm font-semibold text-slate-800 dark:text-slate-200">
+                          ${Number(prompt.price || 0).toFixed(2)}
+                        </p>
+                      </div>
+                      <div className="mt-2 flex gap-2">
+                        <Link
+                          href={`/prompts/${prompt.id}`}
+                          className="text-xs font-semibold text-indigo-600 hover:underline"
+                        >
+                          View
+                        </Link>
+                        <Link
+                          href={`/dashboard/prompts/${prompt.id}`}
+                          className="text-xs font-semibold text-slate-600 hover:underline"
+                        >
+                          Edit
+                        </Link>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        </TabsContent>
 
-          <div className="mt-6 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-            <h2 className="text-lg font-semibold text-slate-900">Stripe Account</h2>
-            <p className="mt-1 text-sm text-slate-600">
-              {stripeAccountId ? 'Connected to Stripe.' : 'Not connected.'}
-            </p>
-            {stripeAccountId && (
-              <p className="text-xs text-slate-500">Account ID: {stripeAccountId}</p>
-            )}
-            <a
-              href="/dashboard/payouts"
-              className="mt-3 inline-flex items-center justify-center rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-indigo-700"
-            >
-              Manage payouts
-            </a>
-          </div>
-        </>
-      )}
+        <TabsContent value="purchases" className="mt-4">
+          <Card className="border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900">
+            <CardHeader>
+              <CardTitle>Purchases</CardTitle>
+            </CardHeader>
+            <CardContent>
+              {loading ? (
+                <div className="space-y-3">
+                  {[1, 2, 3].map((i) => (
+                    <Card key={i} className="border-slate-200 dark:border-slate-800">
+                      <CardContent className="p-3 space-y-2">
+                        <Skeleton className="h-4 w-1/2" />
+                        <Skeleton className="h-3 w-24" />
+                      </CardContent>
+                    </Card>
+                  ))}
+                </div>
+              ) : purchases.length === 0 ? (
+                <EmptyState title="No purchases yet" description="Sales will appear here." />
+              ) : (
+                <div className="space-y-3">
+                  {purchases.map((purchase) => (
+                    <div
+                      key={purchase.id}
+                      className="flex flex-col gap-1 rounded-lg border border-slate-200 p-3 dark:border-slate-800 md:flex-row md:items-center md:justify-between"
+                    >
+                      <div>
+                        <p className="text-sm font-semibold text-slate-900">
+                          {purchase.prompts?.title || 'Prompt'}
+                        </p>
+                        <p className="text-xs text-slate-500">
+                          {new Date(purchase.created_at).toLocaleDateString()}
+                        </p>
+                      </div>
+                      <div className="flex items-center gap-3 text-sm font-semibold text-slate-800">
+                        ${Number(purchase.price || 0).toFixed(2)}
+                        {purchase.prompt_id && (
+                          <Link
+                            href={`/prompt/${purchase.prompt_id}/delivery`}
+                            className="text-xs font-semibold text-indigo-600 hover:underline"
+                          >
+                            Open
+                          </Link>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        <TabsContent value="earnings" className="mt-4">
+          <Card className="border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900">
+            <CardHeader>
+              <CardTitle>Earnings</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                <StatCard label="Total Earnings" value={`$${earnings.toFixed(2)}`} />
+                <StatCard label="Total Sales" value={`$${totalSales.toFixed(2)}`} />
+              </div>
+              <p className="mt-4 text-sm text-slate-600">
+                Earnings are calculated from your prompt sales. Withdrawals and fees may not be reflected.
+              </p>
+            </CardContent>
+          </Card>
+        </TabsContent>
+      </Tabs>
     </div>
+  );
+}
+
+function StatCard({ label, value }: { label: string; value: string }) {
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 6 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.2, ease: 'easeOut' }}
+    >
+      <Card className="shadow-none border-slate-200 dark:border-slate-800">
+        <CardContent className="p-4">
+          <p className="text-xs uppercase text-slate-500">{label}</p>
+          <p className="mt-2 text-2xl font-semibold text-slate-900 dark:text-slate-100">{value}</p>
+        </CardContent>
+      </Card>
+    </motion.div>
   );
 }

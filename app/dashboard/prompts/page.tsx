@@ -1,14 +1,16 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
+import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 
+import PromptCard from '@/components/PromptCard';
 import { supabase } from '@/lib/supabase-client';
 
 type PromptRow = {
   id: string;
   title: string;
-  category: string | null;
+  description: string | null;
   price: number | null;
   created_at: string;
   user_id: string;
@@ -19,8 +21,7 @@ export default function DashboardPromptsPage() {
   const [prompts, setPrompts] = useState<PromptRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [userId, setUserId] = useState<string | null>(null);
-  const [success, setSuccess] = useState<string | null>(null);
+  const [copyMessage, setCopyMessage] = useState<string | null>(null);
 
   const sortedPrompts = useMemo(
     () =>
@@ -42,11 +43,10 @@ export default function DashboardPromptsPage() {
       }
 
       const currentUserId = sessionData.session.user.id;
-      setUserId(currentUserId);
 
       const { data, error: promptErr } = await supabase
         .from<PromptRow>('prompts')
-        .select('id, title, category, price, created_at, user_id')
+        .select('id, title, description, price, created_at, user_id')
         .eq('user_id', currentUserId);
 
       if (promptErr) {
@@ -62,20 +62,16 @@ export default function DashboardPromptsPage() {
     void loadPrompts();
   }, [router]);
 
-  const handleDelete = async (id: string) => {
-    if (!confirm('Delete this prompt?')) return;
-    const { error: deleteErr } = await supabase.from('prompts').delete().eq('id', id);
-    if (deleteErr) {
-      alert(deleteErr.message);
-      return;
+  const handleCopy = async (id: string) => {
+    try {
+      const url = `${window.location.origin}/prompts/${id}`;
+      await navigator.clipboard.writeText(url);
+      setCopyMessage('Link copied to clipboard');
+      setTimeout(() => setCopyMessage(null), 2000);
+    } catch (err: any) {
+      setCopyMessage(err?.message ?? 'Copy failed');
+      setTimeout(() => setCopyMessage(null), 2000);
     }
-    setPrompts((prev) => prev.filter((p) => p.id !== id));
-    setSuccess('Prompt deleted.');
-    setTimeout(() => setSuccess(null), 2500);
-  };
-
-  const handleEdit = (id: string) => {
-    router.push(`/dashboard/prompts/${id}`);
   };
 
   return (
@@ -86,12 +82,12 @@ export default function DashboardPromptsPage() {
           <h1 className="text-2xl font-semibold text-slate-900">My Prompts</h1>
           <p className="text-sm text-slate-600">Manage your uploaded prompts.</p>
         </div>
-        <a
+        <Link
           href="/dashboard/upload"
           className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-indigo-700"
         >
           Upload New
-        </a>
+        </Link>
       </div>
 
       {error && (
@@ -99,65 +95,79 @@ export default function DashboardPromptsPage() {
           {error}
         </div>
       )}
-      {success && (
-        <div className="mb-4 rounded-lg border border-green-200 bg-green-50 px-4 py-3 text-sm text-green-700">
-          {success}
+      {copyMessage && (
+        <div className="mb-4 rounded-lg border border-indigo-200 bg-indigo-50 px-4 py-3 text-sm text-indigo-800">
+          {copyMessage}
         </div>
       )}
 
       {loading ? (
-        <div className="rounded-2xl border border-slate-200 bg-white p-6 text-sm text-slate-600 shadow-sm">
-          Loading your prompts...
+        <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 md:grid-cols-3">
+          {[1, 2, 3].map((i) => (
+            <div
+              key={i}
+              className="h-full rounded-xl border border-slate-200 bg-white p-5 shadow-sm"
+            >
+              <div className="flex h-full flex-col gap-4 animate-pulse">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="flex-1 space-y-2">
+                    <div className="h-5 w-2/3 rounded bg-slate-200" />
+                    <div className="h-4 w-full rounded bg-slate-200" />
+                    <div className="h-4 w-5/6 rounded bg-slate-200" />
+                  </div>
+                  <div className="h-6 w-16 rounded bg-slate-200" />
+                </div>
+                <div className="mt-auto flex items-center justify-between text-xs">
+                  <div className="h-4 w-24 rounded bg-slate-200" />
+                  <div className="h-4 w-16 rounded bg-slate-200" />
+                </div>
+              </div>
+            </div>
+          ))}
         </div>
       ) : sortedPrompts.length === 0 ? (
         <div className="rounded-2xl border border-slate-200 bg-white p-6 text-sm text-slate-600 shadow-sm">
           You have not uploaded any prompts yet.
         </div>
       ) : (
-        <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
-          <table className="min-w-full divide-y divide-slate-200 text-sm">
-            <thead className="bg-slate-50 text-xs font-semibold uppercase text-slate-500">
-              <tr>
-                <th className="px-4 py-3 text-left">Title</th>
-                <th className="px-4 py-3 text-left">Category</th>
-                <th className="px-4 py-3 text-left">Price</th>
-                <th className="px-4 py-3 text-left">Created</th>
-                <th className="px-4 py-3 text-right">Actions</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-200 bg-white">
-              {sortedPrompts.map((prompt) => (
-                <tr key={prompt.id} className="hover:bg-slate-50">
-                  <td className="px-4 py-3 text-slate-900">{prompt.title}</td>
-                  <td className="px-4 py-3 text-slate-700">{prompt.category ?? '—'}</td>
-                  <td className="px-4 py-3 text-slate-700">
-                    {prompt.price ? `$${Number(prompt.price).toFixed(2)}` : 'Free'}
-                  </td>
-                  <td className="px-4 py-3 text-slate-600">
-                    {new Date(prompt.created_at).toLocaleDateString()}
-                  </td>
-                  <td className="px-4 py-3 text-right">
-                    <div className="flex justify-end gap-2">
-                      <button
-                        type="button"
-                        onClick={() => handleEdit(prompt.id)}
-                        className="rounded-md border border-slate-200 px-3 py-1 text-xs font-semibold text-slate-700 transition hover:border-slate-300 hover:bg-slate-50"
-                      >
-                        Edit
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => handleDelete(prompt.id)}
-                        className="rounded-md border border-red-200 px-3 py-1 text-xs font-semibold text-red-700 transition hover:bg-red-50"
-                      >
-                        Delete
-                      </button>
-                    </div>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+        <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 md:grid-cols-3">
+          {sortedPrompts.map((prompt) => (
+            <div
+              key={prompt.id}
+              className="flex h-full flex-col gap-3 rounded-xl border border-slate-200 bg-white p-4 shadow-sm"
+            >
+              <PromptCard
+                id={prompt.id}
+                title={prompt.title}
+                description={prompt.description ?? ''}
+                price={Number(prompt.price ?? 0)}
+                authorName="You"
+                likes={0}
+                createdAt={prompt.created_at ? new Date(prompt.created_at) : undefined}
+              />
+              <div className="flex flex-wrap gap-2">
+                <Link
+                  href={`/dashboard/prompts/${prompt.id}`}
+                  className="inline-flex flex-1 items-center justify-center rounded-md border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-700 transition hover:bg-slate-50"
+                >
+                  Edit
+                </Link>
+                <Link
+                  href={`/prompts/${prompt.id}`}
+                  className="inline-flex flex-1 items-center justify-center rounded-md border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-700 transition hover:bg-slate-50"
+                >
+                  View
+                </Link>
+                <button
+                  type="button"
+                  onClick={() => handleCopy(prompt.id)}
+                  className="inline-flex flex-1 items-center justify-center rounded-md border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-700 transition hover:bg-slate-50"
+                >
+                  Copy Link
+                </button>
+              </div>
+            </div>
+          ))}
         </div>
       )}
     </div>

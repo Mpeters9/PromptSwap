@@ -1,204 +1,196 @@
-'use client';
+import { PrismaClient } from '@prisma/client';
+import Link from 'next/link';
+import { motion } from 'framer-motion';
 
-import { useEffect, useMemo, useState } from 'react';
+import { PromptCard } from '@/components/PromptCard';
+import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import { Card, CardContent } from '@/components/ui/card';
+import { Input } from '@/components/ui/input';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
 
-import MarketplaceFilters from '@/components/MarketplaceFilters';
-import PromptCard from '@/components/PromptCard';
-import EmptyState from '@/components/ui/EmptyState';
-import { supabase } from '@/lib/supabase-client';
+const prisma = new PrismaClient();
 
-type Prompt = {
-  id: string;
-  title: string;
-  description: string | null;
-  price: number | null;
-  tags: string[] | null;
-  category: string | null;
-  created_at: string;
+type MarketplaceProps = {
+  searchParams?: { search?: string; category?: string; sort?: string };
 };
 
-type SortOption = 'price-asc' | 'price-desc' | 'newest';
+export default async function MarketplacePage({ searchParams }: MarketplaceProps) {
+  const search = searchParams?.search?.toString().trim() ?? '';
+  const category = searchParams?.category?.toString().trim() ?? '';
+  const sort = searchParams?.sort?.toString().trim() ?? 'newest';
 
-export default function MarketplacePage() {
-  const [prompts, setPrompts] = useState<Prompt[]>([]);
-  const [loading, setLoading] = useState<boolean>(true);
-  const [error, setError] = useState<string | null>(null);
-  const [search, setSearch] = useState<string>('');
-  const [debouncedSearch, setDebouncedSearch] = useState<string>('');
-  const [category, setCategory] = useState<string>('');
-  const [selectedTags, setSelectedTags] = useState<string[]>([]);
-  const [sort, setSort] = useState<SortOption>('newest');
+  const orderBy =
+    sort === 'priceAsc'
+      ? { price: 'asc' }
+      : sort === 'priceDesc'
+        ? { price: 'desc' }
+        : sort === 'popular'
+          ? { orders: { _count: 'desc' } }
+          : { createdAt: 'desc' };
 
-  useEffect(() => {
-    const fetchPrompts = async () => {
-      setLoading(true);
-      const { data, error: fetchError } = await supabase
-        .from('prompts')
-        .select('id, title, description, price, tags, category, created_at')
-        .order('created_at', { ascending: false });
+  const [prompts, categories] = await Promise.all([
+    prisma.prompt.findMany({
+      where: {
+        AND: [
+          search
+            ? {
+                OR: [
+                  { title: { contains: search, mode: 'insensitive' } },
+                  { description: { contains: search, mode: 'insensitive' } },
+                ],
+              }
+            : undefined,
+          category ? { category } : undefined,
+        ].filter(Boolean) as object[],
+      },
+      orderBy,
+      select: {
+        id: true,
+        title: true,
+        description: true,
+        price: true,
+        category: true,
+        tags: true,
+        createdAt: true,
+        user_id: true,
+        likes: true,
+        preview_image: true,
+      },
+    }),
+    prisma.prompt.findMany({
+      distinct: ['category'],
+      where: { category: { not: null } },
+      select: { category: true },
+      orderBy: { category: 'asc' },
+    }),
+  ]);
 
-      if (fetchError) {
-        setError(fetchError.message);
-      } else {
-        setPrompts(data ?? []);
-      }
-      setLoading(false);
-    };
-
-    void fetchPrompts();
-  }, []);
-
-  const categories = useMemo(() => {
-    const set = new Set<string>();
-    prompts.forEach((p) => {
-      if (p.category) set.add(p.category);
-    });
-    return Array.from(set);
-  }, [prompts]);
-
-  const tags = useMemo(() => {
-    const set = new Set<string>();
-    prompts.forEach((p) => {
-      (p.tags ?? []).forEach((t) => set.add(t));
-    });
-    return Array.from(set);
-  }, [prompts]);
-
-  useEffect(() => {
-    const id = window.setTimeout(() => setDebouncedSearch(search), 200);
-    return () => window.clearTimeout(id);
-  }, [search]);
-
-  const filteredPrompts = useMemo(() => {
-    let result = [...prompts];
-    const searchLower = debouncedSearch.toLowerCase();
-    if (searchLower) {
-      result = result.filter(
-        (p) =>
-          p.title.toLowerCase().includes(searchLower) ||
-          (p.description ?? '').toLowerCase().includes(searchLower),
-      );
-    }
-    if (category) {
-      result = result.filter((p) => p.category === category);
-    }
-    if (selectedTags.length > 0) {
-      result = result.filter((p) => {
-        const t = p.tags ?? [];
-        return selectedTags.every((tag) => t.includes(tag));
-      });
-    }
-
-    result.sort((a, b) => {
-      if (sort === 'price-asc') {
-        return (Number(a.price) || 0) - (Number(b.price) || 0);
-      }
-      if (sort === 'price-desc') {
-        return (Number(b.price) || 0) - (Number(a.price) || 0);
-      }
-      // newest (default)
-      return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
-    });
-
-    return result;
-  }, [category, debouncedSearch, prompts, selectedTags, sort]);
-
-  const handleCategoryToggle = (value: string) => {
-    setCategory((current) => (current === value ? '' : value));
-  };
+  const categoryOptions = categories
+    .map((c) => c.category)
+    .filter((c): c is string => Boolean(c));
 
   return (
-    <div className="max-w-6xl mx-auto px-4 py-10">
-      <div className="mb-8 space-y-2">
-        <h1 className="text-3xl font-semibold text-gray-900">Marketplace</h1>
-        <p className="text-sm text-gray-600">Browse, buy, and sell high-quality prompts.</p>
-      </div>
+    <div className="mx-auto max-w-6xl px-4 py-8">
+      <motion.div
+        className="mb-6 space-y-2 text-center md:text-left"
+        initial={{ opacity: 0, y: 8 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.25, ease: 'easeOut' }}
+      >
+        <h1 className="text-3xl font-semibold text-slate-900 dark:text-slate-100">Marketplace</h1>
+        <p className="text-sm text-slate-600 dark:text-slate-300">
+          Browse, filter, and purchase quality prompts.
+        </p>
+      </motion.div>
 
-      <div className="mb-4 -mx-1 overflow-x-auto">
-        <div className="flex w-full items-center gap-2 px-1">
-          {categories.map((cat) => {
-            const active = category === cat;
+      <motion.div
+        initial={{ opacity: 0, y: 6 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.2, ease: 'easeOut' }}
+      >
+        <Card className="border-slate-200 bg-white shadow-sm dark:border-slate-800 dark:bg-slate-900">
+          <CardContent className="p-4 md:p-6">
+            <form
+              className="grid grid-cols-1 gap-3 md:grid-cols-[1fr,180px,180px,120px] md:items-center"
+              action="/marketplace"
+              method="get"
+            >
+              <Input
+                type="text"
+                name="search"
+                defaultValue={search}
+                placeholder="Search prompts..."
+                className="w-full"
+              />
+
+              <Select name="category" defaultValue={category}>
+                <SelectTrigger className="w-full">
+                  <SelectValue placeholder="Category" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="">All categories</SelectItem>
+                  {categoryOptions.map((cat) => (
+                    <SelectItem key={cat} value={cat}>
+                      {cat}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+
+              <Select name="sort" defaultValue={sort}>
+                <SelectTrigger className="w-full">
+                  <SelectValue placeholder="Sort" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="newest">Newest</SelectItem>
+                  <SelectItem value="priceAsc">Price: Low to High</SelectItem>
+                  <SelectItem value="priceDesc">Price: High to Low</SelectItem>
+                  <SelectItem value="popular">Popular</SelectItem>
+                </SelectContent>
+              </Select>
+
+              <div className="flex items-center gap-2">
+                <Button type="submit" className="w-full">
+                  Apply
+                </Button>
+                {(search || category || sort !== 'newest') && (
+                  <Button variant="ghost" asChild className="w-full">
+                    <Link href="/marketplace">Clear</Link>
+                  </Button>
+                )}
+              </div>
+            </form>
+          </CardContent>
+        </Card>
+      </motion.div>
+
+      {categoryOptions.length > 0 && (
+        <div className="mb-5 flex flex-wrap gap-2">
+          {categoryOptions.map((cat) => {
+            const isActive = cat === category;
+            const searchParam = search ? `&search=${encodeURIComponent(search)}` : '';
+            const sortParam = sort ? `&sort=${encodeURIComponent(sort)}` : '';
             return (
-              <button
+              <Badge
                 key={cat}
-                type="button"
-                onClick={() => handleCategoryToggle(cat)}
-                className={`whitespace-nowrap rounded-full px-4 py-1 text-sm border transition hover:bg-gray-200 ${
-                  active ? 'bg-black text-white border-black' : 'border-gray-200 text-gray-700'
-                }`}
+                variant={isActive ? 'default' : 'outline'}
+                className="cursor-pointer transition hover:scale-[1.02]"
+                asChild
               >
-                {cat}
-              </button>
+                <Link href={`/marketplace?category=${encodeURIComponent(cat)}${searchParam}${sortParam}`}>
+                  {cat}
+                </Link>
+              </Badge>
             );
           })}
         </div>
-      </div>
-
-      <div className="mb-6 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-        <input
-          type="text"
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          placeholder="Search prompts..."
-          className="w-full rounded-xl border border-gray-200 bg-white px-4 py-2 text-sm shadow-sm focus:outline-none focus:ring-2 focus:ring-indigo-200 md:w-64"
-        />
-        <MarketplaceFilters
-          categories={categories}
-          tags={tags}
-          category={category}
-          selectedTags={selectedTags}
-          sort={sort}
-          onCategoryChange={setCategory}
-          onTagsChange={setSelectedTags}
-          onSortChange={setSort}
-        />
-      </div>
-
-      {error && (
-        <div className="mb-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
-          {error}
-        </div>
       )}
 
-      {loading ? (
-        <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 md:grid-cols-3">
-          {[1, 2, 3].map((i) => (
-            <div
-              key={i}
-              className="h-full rounded-xl border border-gray-200 bg-white p-5 shadow-sm"
-            >
-              <div className="flex h-full flex-col gap-4 animate-pulse">
-                <div className="flex items-start justify-between gap-3">
-                  <div className="flex-1 space-y-2">
-                    <div className="h-5 w-2/3 rounded bg-gray-200" />
-                    <div className="h-4 w-full rounded bg-gray-200" />
-                    <div className="h-4 w-5/6 rounded bg-gray-200" />
-                  </div>
-                  <div className="h-6 w-16 rounded bg-gray-200" />
-                </div>
-                <div className="mt-auto flex items-center justify-between text-xs">
-                  <div className="h-4 w-24 rounded bg-gray-200" />
-                  <div className="h-4 w-16 rounded bg-gray-200" />
-                </div>
-              </div>
-            </div>
-          ))}
+      {prompts.length === 0 ? (
+        <div className="rounded-xl border border-slate-200 bg-white p-6 text-center shadow-sm dark:border-slate-800 dark:bg-slate-900">
+          <p className="text-sm text-slate-600 dark:text-slate-300">
+            {search || category ? 'No prompts match your filters.' : 'No prompts found.'}
+          </p>
         </div>
-      ) : filteredPrompts.length === 0 ? (
-        <EmptyState
-          title="No prompts found"
-          description="Try adjusting filters or search terms to discover more prompts."
-        />
       ) : (
         <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 md:grid-cols-3">
-          {filteredPrompts.map((prompt) => (
+          {prompts.map((prompt) => (
             <PromptCard
               key={prompt.id}
               id={prompt.id}
               title={prompt.title}
               description={prompt.description ?? ''}
               price={Number(prompt.price ?? 0)}
-              createdAt={prompt.created_at ? new Date(prompt.created_at) : undefined}
+              authorName={prompt.user_id ?? 'Creator'}
+              category={prompt.category ?? undefined}
+              previewImage={prompt.preview_image ?? undefined}
             />
           ))}
         </div>
