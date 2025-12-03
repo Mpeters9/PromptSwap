@@ -5,7 +5,6 @@ import { logError } from '@/lib/logger';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
-export const revalidate = 0;
 export const preferredRegion = 'iad1';
 
 const stripeSecret = process.env.STRIPE_SECRET_KEY;
@@ -249,6 +248,22 @@ async function handlePaymentIntentSucceeded(intent: Stripe.PaymentIntent) {
   }
 }
 
+async function handlePaymentIntentFailed(intent: Stripe.PaymentIntent) {
+  const promptId =
+    readMetadata(intent.metadata, ['prompt_id', 'promptId']) ??
+    (intent.metadata?.prompt as string | undefined) ??
+    null;
+  const buyerId = readMetadata(intent.metadata, ['user_id', 'buyer_id', 'buyerId', 'userId']);
+
+  console.error('Payment intent failed', {
+    intentId: intent.id,
+    promptId,
+    buyerId,
+    failureCode: intent.last_payment_error?.code,
+    failureMessage: intent.last_payment_error?.message,
+  });
+}
+
 async function handleTransferPaid(transfer: Stripe.Transfer) {
   const accountId =
     typeof transfer.destination === 'string'
@@ -289,24 +304,24 @@ async function handleTransferPaid(transfer: Stripe.Transfer) {
 
 export async function POST(req: Request) {
   const signature = req.headers.get('stripe-signature');
-  const rawBody = await req.text();
+  // Use the raw body to ensure Stripe signature verification works as expected.
+  const rawBody = Buffer.from(await req.arrayBuffer());
 
   if (!signature) {
     console.error('Missing Stripe signature header');
-    return new Response('Missing signature', { status: 400 });
+    return NextResponse.json({ error: 'Missing signature' }, { status: 400 });
   }
 
   let event: Stripe.Event;
   try {
     event = stripe.webhooks.constructEvent(rawBody, signature, webhookSecret);
   } catch (err: any) {
-    console.error('Webhook signature verification failed:', err?.message || err);
-    return new Response(`Webhook Error: ${err?.message || 'Invalid signature'}`, { status: 400 });
+    console.error('Webhook signature verification failed', err?.message || err);
+    return NextResponse.json({ error: err?.message || 'Invalid signature' }, { status: 400 });
   }
 
   try {
     if (await eventAlreadyProcessed(event.id)) {
-      console.log('Stripe event already processed, skipping', { eventId: event.id, type: event.type });
       return NextResponse.json({ received: true, duplicate: true }, { status: 200 });
     }
 
@@ -317,17 +332,20 @@ export async function POST(req: Request) {
       case 'payment_intent.succeeded':
         await handlePaymentIntentSucceeded(event.data.object as Stripe.PaymentIntent);
         break;
+      case 'payment_intent.payment_failed':
+        await handlePaymentIntentFailed(event.data.object as Stripe.PaymentIntent);
+        break;
       case 'transfer.paid':
         await handleTransferPaid(event.data.object as Stripe.Transfer);
         break;
       default:
-        console.log(`Unhandled event type ${event.type}`);
     }
 
     await markEventProcessed(event);
     return NextResponse.json({ received: true }, { status: 200 });
   } catch (err: any) {
     await logError(err, { scope: 'stripe_webhook', eventId: event?.id, type: event?.type });
-    return NextResponse.json({ error: err?.message || 'Webhook processing failed' }, { status: 500 });
+    console.error('Stripe webhook handler failed', err?.message || err);
+    return NextResponse.json({ error: err?.message || 'Webhook processing failed' }, { status: 400 });
   }
 }
