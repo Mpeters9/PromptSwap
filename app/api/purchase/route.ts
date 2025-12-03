@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
 import { createRouteHandlerClient } from '@supabase/auth-helpers-nextjs';
 import { createClient } from '@supabase/supabase-js';
+import { logError } from '@/lib/logger';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -188,7 +189,7 @@ export async function POST(req: Request) {
 
     return NextResponse.json({ success: true, content: prompt.prompt_text });
   } catch (err: any) {
-    console.error('Purchase route unexpected error', err);
+    await logError(err, { scope: 'purchase_api' });
     return NextResponse.json({ error: 'purchase_failed' }, { status: 500 });
   }
 }

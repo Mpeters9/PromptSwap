@@ -1,6 +1,7 @@
 import { NextResponse, type NextRequest } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import Stripe from 'stripe';
+import { logError } from '@/lib/logger';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -183,7 +184,7 @@ export async function POST(req: NextRequest) {
       remaining,
     });
   } catch (err: any) {
-    console.error('Payout: unexpected error', err);
+    await logError(err, { scope: 'stripe_payout' });
     return NextResponse.json({ error: 'payout_failed' }, { status: 500 });
   }
 }

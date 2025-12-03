@@ -16,6 +16,11 @@ import {
 } from '@/components/ui/select';
 
 export const dynamic = 'force-dynamic';
+export const metadata = buildMetadata({
+  title: 'Marketplace - PromptSwap',
+  description: 'Browse, filter, and purchase quality prompts on PromptSwap.',
+  image: `${process.env.NEXT_PUBLIC_SITE_URL || 'http://localhost:3000'}/api/og`,
+});
 
 const prisma = new PrismaClient();
 

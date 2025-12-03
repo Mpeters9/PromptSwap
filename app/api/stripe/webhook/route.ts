@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import Stripe from 'stripe';
 import { createClient } from '@supabase/supabase-js';
+import { logError } from '@/lib/logger';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -326,7 +327,7 @@ export async function POST(req: Request) {
     await markEventProcessed(event);
     return NextResponse.json({ received: true }, { status: 200 });
   } catch (err: any) {
-    console.error('Webhook processing error', err);
+    await logError(err, { scope: 'stripe_webhook', eventId: event?.id, type: event?.type });
     return NextResponse.json({ error: err?.message || 'Webhook processing failed' }, { status: 500 });
   }
 }

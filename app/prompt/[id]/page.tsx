@@ -3,8 +3,14 @@ import { notFound, redirect } from 'next/navigation';
 import { createClient } from '@supabase/supabase-js';
 
 import { PurchaseButton } from '@/components/PurchaseButton';
+import { buildMetadata } from '@/lib/metadata';
 
 export const dynamic = 'force-dynamic';
+export const metadata = buildMetadata({
+  title: 'Prompt - PromptSwap',
+  description: 'View prompt details and purchase securely on PromptSwap.',
+  image: `${process.env.NEXT_PUBLIC_SITE_URL || 'http://localhost:3000'}/api/og`,
+});
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL?.trim();
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY?.trim();
