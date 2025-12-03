@@ -37,7 +37,7 @@ export default function PromptDeliveryPage() {
       const { data: purchase, error: purchaseError } = await supabase
         .from('purchases')
         .select('id')
-        .eq('user_id', userId)
+        .eq('buyer_id', userId)
         .eq('prompt_id', params.id)
         .maybeSingle();
 

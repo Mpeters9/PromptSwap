@@ -62,6 +62,96 @@ CREATE INDEX idx_prompt_sales_buyer_id ON public.prompt_sales (buyer_id);
 CREATE INDEX idx_prompt_sales_seller_id ON public.prompt_sales (seller_id);
 CREATE INDEX idx_prompt_sales_txn_id ON public.prompt_sales (stripe_txn_id);
 
+ALTER TABLE public.prompts ENABLE ROW LEVEL SECURITY;
+CREATE POLICY prompts_select_public_or_owner_or_service
+  ON public.prompts FOR SELECT
+  USING (is_public = true OR auth.uid() = user_id OR auth.role() = 'service_role');
+CREATE POLICY prompts_insert_owner_or_service
+  ON public.prompts FOR INSERT
+  WITH CHECK (auth.uid() = user_id OR auth.role() = 'service_role');
+CREATE POLICY prompts_update_owner_or_service
+  ON public.prompts FOR UPDATE
+  USING (auth.uid() = user_id OR auth.role() = 'service_role');
+CREATE POLICY prompts_delete_owner_or_service
+  ON public.prompts FOR DELETE
+  USING (auth.uid() = user_id OR auth.role() = 'service_role');
+
+-- Purchases policies
+ALTER TABLE public.purchases ENABLE ROW LEVEL SECURITY;
+CREATE POLICY purchases_select_buyer_seller_or_service
+  ON public.purchases FOR SELECT
+  USING (auth.uid() = buyer_id OR auth.uid() = seller_id OR auth.role() = 'service_role');
+CREATE POLICY purchases_insert_service_only
+  ON public.purchases FOR INSERT
+  WITH CHECK (auth.role() = 'service_role');
+CREATE POLICY purchases_update_service_only
+  ON public.purchases FOR UPDATE
+  USING (auth.role() = 'service_role')
+  WITH CHECK (auth.role() = 'service_role');
+CREATE POLICY purchases_delete_service_only
+  ON public.purchases FOR DELETE
+  USING (auth.role() = 'service_role');
+
+-- Logs processed Stripe events for idempotency.
+CREATE TABLE public.stripe_events (
+  event_id text PRIMARY KEY,
+  type text,
+  created_at timestamptz DEFAULT now()
+);
+
+CREATE POLICY stripe_events_insert_service ON public.stripe_events FOR INSERT WITH CHECK (auth.role() = 'service_role');
+CREATE POLICY stripe_events_select_service ON public.stripe_events FOR SELECT USING (auth.role() = 'service_role');
+ALTER TABLE public.stripe_events ENABLE ROW LEVEL SECURITY;
+
+-- Records payouts made to sellers (manual or automatic).
+CREATE TABLE public.payouts (
+  id uuid PRIMARY KEY DEFAULT uuid_generate_v4(),
+  seller_id uuid NOT NULL REFERENCES auth.users (id),
+  amount numeric(10,2) NOT NULL,
+  currency text DEFAULT 'usd',
+  stripe_transfer_id text,
+  destination_account text,
+  created_at timestamptz DEFAULT now()
+);
+
+CREATE UNIQUE INDEX idx_payouts_transfer_id ON public.payouts (stripe_transfer_id);
+CREATE INDEX idx_payouts_seller_id ON public.payouts (seller_id);
+
+ALTER TABLE public.payouts ENABLE ROW LEVEL SECURITY;
+CREATE POLICY payouts_select_self ON public.payouts FOR SELECT USING (auth.uid() = seller_id);
+CREATE POLICY payouts_select_service ON public.payouts FOR SELECT USING (auth.role() = 'service_role');
+CREATE POLICY payouts_insert_service ON public.payouts FOR INSERT WITH CHECK (auth.role() = 'service_role');
+CREATE POLICY payouts_update_service ON public.payouts FOR UPDATE USING (auth.role() = 'service_role') WITH CHECK (auth.role() = 'service_role');
+CREATE POLICY payouts_delete_service ON public.payouts FOR DELETE USING (auth.role() = 'service_role');
+
+-- Profiles protections (credits and Stripe fields)
+ALTER TABLE public.profiles ENABLE ROW LEVEL SECURITY;
+CREATE POLICY profiles_select_self_or_service
+  ON public.profiles FOR SELECT
+  USING (auth.uid() = id OR auth.role() = 'service_role');
+CREATE POLICY profiles_update_service_only
+  ON public.profiles FOR UPDATE
+  USING (auth.role() = 'service_role');
+CREATE POLICY profiles_insert_service_only
+  ON public.profiles FOR INSERT
+  WITH CHECK (auth.role() = 'service_role');
+
+-- Prompt sales policies
+ALTER TABLE public.prompt_sales ENABLE ROW LEVEL SECURITY;
+CREATE POLICY prompt_sales_select_buyer_seller_or_service
+  ON public.prompt_sales FOR SELECT
+  USING (auth.uid() = buyer_id OR auth.uid() = seller_id OR auth.role() = 'service_role');
+CREATE POLICY prompt_sales_insert_service_only
+  ON public.prompt_sales FOR INSERT
+  WITH CHECK (auth.role() = 'service_role');
+CREATE POLICY prompt_sales_update_service_only
+  ON public.prompt_sales FOR UPDATE
+  USING (auth.role() = 'service_role')
+  WITH CHECK (auth.role() = 'service_role');
+CREATE POLICY prompt_sales_delete_service_only
+  ON public.prompt_sales FOR DELETE
+  USING (auth.role() = 'service_role');
+
 -- Manages prompt swap offers between users and their statuses.
 CREATE TABLE public.swaps (
   id uuid PRIMARY KEY DEFAULT uuid_generate_v4(),

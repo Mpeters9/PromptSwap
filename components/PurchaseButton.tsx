@@ -39,8 +39,10 @@ export function PurchaseButton({ promptId, label = 'Purchase' }: Props) {
       }
 
       const code = data?.error ?? 'purchase_failed';
+      console.error('Purchase failed response', { status: res.status, code, body: data });
       setError(errorMessages[code] ?? 'Purchase failed. Please try again.');
     } catch (err: any) {
+      console.error('Purchase request error', err);
       setError(err?.message ?? 'Purchase failed. Please try again.');
     } finally {
       setLoading(false);

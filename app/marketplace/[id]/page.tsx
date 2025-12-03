@@ -3,10 +3,13 @@ import Link from 'next/link';
 import { motion } from 'framer-motion';
 
 import { PromptCard } from '@/components/PromptCard';
+import BuyButton from '@/components/BuyButton';
 import { Avatar, AvatarImage } from '@/components/ui/avatar';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
+
+export const dynamic = 'force-dynamic';
 
 const prisma = new PrismaClient();
 
@@ -109,7 +112,7 @@ export default async function PromptDetailPage({ params }: { params: { id: strin
 
             <div className="flex flex-col items-end gap-3">
               <Badge className="bg-indigo-600 text-white hover:bg-indigo-700">{priceLabel}</Badge>
-              <Button className="w-full md:w-auto">Buy</Button>
+              <BuyButton promptId={prompt.id} title={prompt.title} price={Number(prompt.price ?? 0)} />
             </div>
           </div>
 
@@ -126,10 +129,10 @@ export default async function PromptDetailPage({ params }: { params: { id: strin
           )}
 
           <div className="rounded-xl border border-slate-200 bg-slate-50 p-5">
-            <p className="text-sm font-semibold text-slate-900">Prompt Text</p>
-            <pre className="mt-2 whitespace-pre-wrap text-sm text-slate-800">
-              {prompt.prompt_text}
-            </pre>
+            <p className="text-sm font-semibold text-slate-900">Prompt Preview</p>
+            <p className="mt-2 text-sm text-slate-700">
+              Purchase to unlock the full prompt content instantly after checkout.
+            </p>
           </div>
           </CardContent>
         </Card>

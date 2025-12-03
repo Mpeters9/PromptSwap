@@ -4,6 +4,15 @@ export default async function LibraryPage() {
   const supabase = createClientComponentClient();
   const { data: { user } } = await supabase.auth.getUser();
 
+  if (!user) {
+    return (
+      <div className="max-w-3xl mx-auto pt-20">
+        <h1 className="text-3xl font-bold mb-6">Your Library</h1>
+        <p className="text-slate-700">Please sign in to view purchased prompts.</p>
+      </div>
+    );
+  }
+
   const { data: purchases } = await supabase
     .from("purchases")
     .select("prompt_id, prompts(*)")

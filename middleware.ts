@@ -37,6 +37,11 @@ export async function middleware(req: NextRequest) {
   const path = req.nextUrl.pathname;
   const isApi = path.startsWith('/api/');
 
+  // Skip webhook endpoints that require raw body (Stripe).
+  if (isApi && path.startsWith('/api/stripe/webhook')) {
+    return NextResponse.next();
+  }
+
   if (isApi) {
     const ip = getClientIp(req);
     const now = Date.now();

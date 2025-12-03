@@ -15,6 +15,8 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 
+export const dynamic = 'force-dynamic';
+
 const prisma = new PrismaClient();
 
 type MarketplaceProps = {
@@ -35,42 +37,49 @@ export default async function MarketplacePage({ searchParams }: MarketplaceProps
           ? { orders: { _count: 'desc' } }
           : { createdAt: 'desc' };
 
-  const [prompts, categories] = await Promise.all([
-    prisma.prompt.findMany({
-      where: {
-        AND: [
-          search
-            ? {
-                OR: [
-                  { title: { contains: search, mode: 'insensitive' } },
-                  { description: { contains: search, mode: 'insensitive' } },
-                ],
-              }
-            : undefined,
-          category ? { category } : undefined,
-        ].filter(Boolean) as object[],
-      },
-      orderBy,
-      select: {
-        id: true,
-        title: true,
-        description: true,
-        price: true,
-        category: true,
-        tags: true,
-        createdAt: true,
-        user_id: true,
-        likes: true,
-        preview_image: true,
-      },
-    }),
-    prisma.prompt.findMany({
-      distinct: ['category'],
-      where: { category: { not: null } },
-      select: { category: true },
-      orderBy: { category: 'asc' },
-    }),
-  ]);
+  let prompts = [];
+  let categories = [];
+
+  try {
+    [prompts, categories] = await Promise.all([
+      prisma.prompt.findMany({
+        where: {
+          AND: [
+            search
+              ? {
+                  OR: [
+                    { title: { contains: search, mode: 'insensitive' } },
+                    { description: { contains: search, mode: 'insensitive' } },
+                  ],
+                }
+              : undefined,
+            category ? { category } : undefined,
+          ].filter(Boolean) as object[],
+        },
+        orderBy,
+        select: {
+          id: true,
+          title: true,
+          description: true,
+          price: true,
+          category: true,
+          tags: true,
+          createdAt: true,
+          user_id: true,
+          likes: true,
+          preview_image: true,
+        },
+      }),
+      prisma.prompt.findMany({
+        distinct: ['category'],
+        where: { category: { not: null } },
+        select: { category: true },
+        orderBy: { category: 'asc' },
+      }),
+    ]);
+  } catch (err) {
+    console.error('Marketplace load failed', err);
+  }
 
   const categoryOptions = categories
     .map((c) => c.category)

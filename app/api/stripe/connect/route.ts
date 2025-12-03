@@ -3,6 +3,7 @@ import { createClient } from '@supabase/supabase-js';
 import Stripe from 'stripe';
 
 export const runtime = 'nodejs';
+export const dynamic = 'force-dynamic';
 
 const clientId = process.env.NEXT_PUBLIC_STRIPE_CLIENT_ID;
 const stripeSecretKey = process.env.STRIPE_SECRET_KEY;
@@ -22,6 +23,28 @@ const stripe = new Stripe(stripeSecretKey, { apiVersion: '2023-08-16' });
 const supabaseAdmin = createClient(supabaseUrl, supabaseServiceKey);
 
 type ConnectBody = { user_id?: string };
+const projectRef = supabaseUrl?.replace(/^https?:\/\//, '').split('.')[0];
+
+function extractToken(req: NextRequest) {
+  const authHeader = req.headers.get('authorization');
+  if (authHeader?.toLowerCase().startsWith('bearer ')) {
+    return authHeader.replace(/^[Bb]earer\s+/, '').trim();
+  }
+  if (!projectRef) return null;
+  const cookieName = `sb-${projectRef}-auth-token`;
+  const raw =
+    req.cookies.get(cookieName)?.value ?? req.cookies.get('supabase-auth-token')?.value;
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed)) return (parsed[0] as string) ?? null;
+    if (parsed?.access_token) return parsed.access_token as string;
+    if (parsed?.currentSession?.access_token) return parsed.currentSession.access_token as string;
+  } catch (err) {
+    console.error('Stripe connect token parse error', err);
+  }
+  return null;
+}
 
 /**
  * POST /api/stripe/connect
@@ -36,6 +59,15 @@ export async function POST(req: NextRequest) {
     const { user_id } = ((await req.json().catch(() => ({}))) as ConnectBody) ?? {};
     if (!user_id) {
       return NextResponse.json({ error: 'user_id is required' }, { status: 400 });
+    }
+
+    const token = extractToken(req);
+    if (!token) {
+      return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
+    }
+    const { data: userData, error: userError } = await supabaseAdmin.auth.getUser(token);
+    if (userError || userData?.user?.id !== user_id) {
+      return NextResponse.json({ error: 'forbidden' }, { status: 403 });
     }
 
     const redirectUri = `${siteUrl}/api/stripe/connect`;
@@ -94,6 +126,15 @@ export async function GET(req: NextRequest) {
   }
 
   try {
+    // Optionally ensure caller is authenticated (protect against CSRF reuse).
+    const token = extractToken(req);
+    if (token) {
+      const { data: userData } = await supabaseAdmin.auth.getUser(token);
+      if (userData?.user?.id && userData.user.id !== state) {
+        return NextResponse.json({ error: 'forbidden' }, { status: 403 });
+      }
+    }
+
     const tokenResponse = await stripe.oauth.token({
       grant_type: 'authorization_code',
       code,

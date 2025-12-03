@@ -14,7 +14,7 @@ type PromptRow = {
 };
 
 type PurchaseRow = {
-  user_id: string;
+  buyer_id: string;
   prompt_id: string;
 };
 
@@ -55,8 +55,8 @@ export default function CheckoutSuccessPage() {
       console.log('Checking purchase for user', currentUserId, 'prompt', promptId);
       const { data: purchaseData, error: purchaseError } = await supabase
         .from<PurchaseRow>('purchases')
-        .select('user_id, prompt_id')
-        .eq('user_id', currentUserId)
+        .select('buyer_id, prompt_id')
+        .eq('buyer_id', currentUserId)
         .eq('prompt_id', promptId)
         .maybeSingle();
 

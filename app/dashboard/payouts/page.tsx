@@ -12,32 +12,44 @@ type ProfileRow = {
 
 type SaleRow = {
   id: string;
-  amount: number | null;
+  price: number | null;
   created_at: string;
-  buyer_email?: string | null;
+  buyer_id?: string | null;
   prompts: {
     title: string | null;
     price: number | null;
   } | null;
 };
 
+type PayoutRow = {
+  id: string;
+  amount: number | null;
+  currency: string | null;
+  stripe_transfer_id?: string | null;
+  created_at: string;
+};
+
 export default function DashboardPayoutsPage() {
   const router = useRouter();
   const [accountId, setAccountId] = useState<string | null>(null);
   const [sales, setSales] = useState<SaleRow[]>([]);
+  const [payouts, setPayouts] = useState<PayoutRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [connecting, setConnecting] = useState(false);
   const [connectError, setConnectError] = useState<string | null>(null);
 
   const earnings = useMemo(() => {
-    const total = sales.reduce((sum, sale) => sum + (Number(sale.amount) || 0), 0);
+    const totalSales = sales.reduce((sum, sale) => sum + (Number(sale.price) || 0), 0);
+    const totalPayouts = payouts.reduce((sum, p) => sum + (Number(p.amount) || 0), 0);
+    const available = Math.max(0, totalSales - totalPayouts);
     return {
-      total,
+      total: totalSales,
       pending: 0,
-      available: total,
+      available,
+      paid: totalPayouts,
     };
-  }, [sales]);
+  }, [sales, payouts]);
 
   useEffect(() => {
     const load = async () => {
@@ -59,6 +71,7 @@ export default function DashboardPayoutsPage() {
         .single();
 
       if (profileErr) {
+        console.error('Payouts profile error', profileErr);
         setError(profileErr.message);
         setLoading(false);
         return;
@@ -66,19 +79,27 @@ export default function DashboardPayoutsPage() {
 
       setAccountId(profileData?.connected_account_id ?? profileData?.stripe_account_id ?? null);
 
-      const { data: salesData, error: salesErr } = await supabase
+      const [{ data: salesData, error: salesErr }, { data: payoutData, error: payoutsErr }] = await Promise.all([
         .from<SaleRow>('purchases')
-        .select('id, amount, buyer_email, created_at, prompts(title, price)')
+        .select('id, price, buyer_id, created_at, prompts(title, price)')
         .eq('seller_id', userId)
-        .order('created_at', { ascending: false });
+        .order('created_at', { ascending: false }),
+      supabase
+        .from<PayoutRow>('payouts')
+        .select('id, amount, currency, stripe_transfer_id, created_at')
+        .eq('seller_id', userId)
+        .order('created_at', { ascending: false }),
+      ]);
 
-      if (salesErr) {
-        setError(salesErr.message);
+      if (salesErr || payoutsErr) {
+        console.error('Payouts fetch error', { salesErr, payoutsErr });
+        setError(salesErr?.message || payoutsErr?.message || 'Failed to load payouts.');
         setLoading(false);
         return;
       }
 
       setSales(salesData ?? []);
+      setPayouts(payoutData ?? []);
       setLoading(false);
     };
 
@@ -161,9 +182,9 @@ export default function DashboardPayoutsPage() {
               <p className="text-2xl font-semibold text-slate-900">{formatCurrency(earnings.total)}</p>
             </div>
             <div>
-              <p className="text-sm text-slate-600">Pending Payouts</p>
+              <p className="text-sm text-slate-600">Paid Out</p>
               <p className="text-2xl font-semibold text-slate-900">
-                {formatCurrency(earnings.pending)}
+                {formatCurrency(earnings.paid)}
               </p>
             </div>
             <div>
@@ -206,9 +227,45 @@ export default function DashboardPayoutsPage() {
                 <div className="font-semibold text-slate-900">
                   {sale.prompts?.title || 'Prompt'}
                 </div>
-                <div>{formatCurrency(sale.prompts?.price ?? sale.amount ?? 0)}</div>
-                <div className="text-slate-600">{sale.buyer_email || '—'}</div>
+                <div>{formatCurrency(sale.prompts?.price ?? sale.price ?? 0)}</div>
+                <div className="text-slate-600">{sale.buyer_id || 'Buyer hidden'}</div>
                 <div className="text-slate-500">{formatDate(sale.created_at)}</div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      <div className="mt-6 rounded-xl bg-white p-6 shadow-sm">
+        <div className="mb-4 flex items-center justify-between">
+          <h3 className="text-lg font-semibold text-slate-900">Payout History</h3>
+          <p className="text-xs text-slate-500">Latest payouts to your Stripe account</p>
+        </div>
+
+        {loading ? (
+          <div className="space-y-3">
+            {[1, 2].map((i) => (
+              <div key={i} className="flex items-center justify-between border-b border-slate-100 pb-3 last:border-b-0">
+                <div className="h-4 w-32 animate-pulse rounded bg-slate-200" />
+                <div className="h-4 w-24 animate-pulse rounded bg-slate-200" />
+              </div>
+            ))}
+          </div>
+        ) : payouts.length === 0 ? (
+          <p className="text-sm text-slate-600">No payouts recorded yet.</p>
+        ) : (
+          <div className="divide-y divide-slate-100">
+            {payouts.map((payout) => (
+              <div
+                key={payout.id}
+                className="grid grid-cols-1 gap-2 py-3 text-sm text-slate-800 sm:grid-cols-4 sm:items-center"
+              >
+                <div className="font-semibold text-slate-900">{formatCurrency(payout.amount ?? 0)}</div>
+                <div className="text-slate-600 uppercase">{(payout.currency || 'usd').toUpperCase()}</div>
+                <div className="text-slate-500 truncate" title={payout.stripe_transfer_id || undefined}>
+                  {payout.stripe_transfer_id || 'Pending'}
+                </div>
+                <div className="text-slate-500">{formatDate(payout.created_at)}</div>
               </div>
             ))}
           </div>

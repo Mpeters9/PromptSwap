@@ -61,6 +61,7 @@ export default function DashboardPage() {
         ]);
 
       if (promptErr || purchaseErr) {
+        console.error('Dashboard load error', { promptErr, purchaseErr });
         setError(promptErr?.message || purchaseErr?.message || 'Failed to load dashboard.');
         setLoading(false);
         return;
@@ -117,6 +118,7 @@ export default function DashboardPage() {
           <TabsTrigger value="prompts">My Prompts</TabsTrigger>
           <TabsTrigger value="purchases">Purchases</TabsTrigger>
           <TabsTrigger value="earnings">Earnings</TabsTrigger>
+          <TabsTrigger value="payouts">Payouts</TabsTrigger>
         </TabsList>
 
         <TabsContent value="prompts" className="mt-4">
@@ -245,6 +247,25 @@ export default function DashboardPage() {
               <p className="mt-4 text-sm text-slate-600">
                 Earnings are calculated from your prompt sales. Withdrawals and fees may not be reflected.
               </p>
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        <TabsContent value="payouts" className="mt-4">
+          <Card className="border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900">
+            <CardHeader>
+              <CardTitle>Payouts</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              <p className="text-sm text-slate-600">
+                Manage your Stripe payouts and view history in the payouts dashboard.
+              </p>
+              <Link
+                href="/dashboard/payouts"
+                className="inline-flex items-center justify-center rounded-md bg-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2"
+              >
+                Open Payouts
+              </Link>
             </CardContent>
           </Card>
         </TabsContent>
