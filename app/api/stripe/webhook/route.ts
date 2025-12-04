@@ -1,8 +1,11 @@
 import { NextResponse } from 'next/server';
 import Stripe from 'stripe';
+import { buffer } from 'micro';
+import { Readable } from 'node:stream';
 import { createClient } from '@supabase/supabase-js';
 import { logError } from '@/lib/logger';
 
+export const config = { api: { bodyParser: false } };
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 export const preferredRegion = 'iad1';
@@ -302,10 +305,19 @@ async function handleTransferPaid(transfer: Stripe.Transfer) {
   }
 }
 
+async function readRawBody(req: Request) {
+  if (!req.body) return Buffer.alloc(0);
+
+  const readable = Readable.fromWeb(req.body as any);
+  (readable as any).headers = Object.fromEntries(req.headers);
+
+  return buffer(readable as any);
+}
+
 export async function POST(req: Request) {
   const signature = req.headers.get('stripe-signature');
-  // Use the raw body to ensure Stripe signature verification works as expected.
-  const rawBody = Buffer.from(await req.arrayBuffer());
+
+  const rawBody = await readRawBody(req);
 
   if (!signature) {
     console.error('Missing Stripe signature header');

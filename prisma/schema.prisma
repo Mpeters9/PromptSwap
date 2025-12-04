@@ -7,7 +7,256 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+model User {
+  id        String    @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  email     String?   @db.Text
+  phone     String?   @db.Text
+  createdAt DateTime? @map("created_at") @default(now()) @db.Timestamptz(6)
+
+  profile               Profile?
+  prompts               Prompt[]
+  promptVersions        PromptVersion[]
+  promptRatings         PromptRating[]
+  promptSalesAsBuyer    PromptSale[]        @relation("PromptSaleBuyer")
+  promptSalesAsSeller   PromptSale[]        @relation("PromptSaleSeller")
+  purchasesAsBuyer      Purchase[]          @relation("PurchaseBuyer")
+  purchasesAsSeller     Purchase[]          @relation("PurchaseSeller")
+  payouts               Payout[]
+  swapsRequested        Swap[]              @relation("SwapRequester")
+  swapsResponded        Swap[]              @relation("SwapResponder")
+  testRuns              TestRun[]
+  products              Product[]
+  promptTemplates       PromptTemplate[]
+  stripeSubscriptions   StripeSubscription[]
+
+  @@map("users")
+  @@schema("auth")
+}
+
+model Profile {
+  id                   String    @id @db.Uuid
+  username             String?   @db.Text
+  credits              Int?      @db.Integer
+  stripeAccountId      String?   @map("stripe_account_id") @db.Text
+  connectedAccountId   String?   @map("connected_account_id") @db.Text
+  isAdmin              Boolean?  @map("is_admin") @default(false) @db.Boolean
+  isBanned             Boolean?  @map("is_banned") @default(false) @db.Boolean
+  createdAt            DateTime? @map("created_at") @default(now()) @db.Timestamp(6)
+
+  user User @relation(fields: [id], references: [id])
+
+  @@map("profiles")
+}
+
+model Product {
+  id          String    @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  userId      String?   @map("user_id") @db.Uuid
+  name        String?   @db.Text
+  description String?   @db.Text
+  price       Decimal?  @db.Decimal(10, 2)
+  isActive    Boolean?  @map("is_active") @default(true) @db.Boolean
+  createdAt   DateTime? @map("created_at") @default(now()) @db.Timestamp(6)
+
+  user                User?                @relation(fields: [userId], references: [id])
+  stripeSubscriptions StripeSubscription[]
+
+  @@map("products")
+}
+
+model PromptTemplate {
+  id        String    @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  userId    String?   @map("user_id") @db.Uuid
+  title     String?   @db.Text
+  content   String?   @db.Text
+  createdAt DateTime? @map("created_at") @default(now()) @db.Timestamp(6)
+
+  user User? @relation(fields: [userId], references: [id])
+
+  @@map("prompt_templates")
+}
+
 model Prompt {
-  id     String @id @default(uuid())
-  likes  Int    @default(0)
+  id           String      @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  userId       String?     @map("user_id") @db.Uuid
+  title        String      @db.Text
+  description  String?     @db.Text
+  tags         String[]?   @db.Text[]
+  price        Decimal?    @db.Decimal(10, 2)
+  promptText   String      @map("prompt_text") @db.Text
+  previewImage String?     @map("preview_image") @db.Text
+  isPublic     Boolean?    @map("is_public") @default(false) @db.Boolean
+  version      Int?        @default(1) @db.Integer
+  createdAt    DateTime?   @map("created_at") @default(now()) @db.Timestamp(6)
+
+  user           User?            @relation(fields: [userId], references: [id])
+  versions       PromptVersion[]
+  ratings        PromptRating[]
+  sales          PromptSale[]
+  purchases      Purchase[]
+  swapsRequested Swap[]           @relation("RequestedPrompt")
+  swapsOffered   Swap[]           @relation("OfferedPrompt")
+  testRuns       TestRun[]
+
+  @@index([userId], map: "idx_prompts_user_id")
+  @@index([isPublic], map: "idx_prompts_public")
+  @@map("prompts")
+}
+
+model PromptVersion {
+  id        String    @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  promptId  String?   @map("prompt_id") @db.Uuid
+  userId    String?   @map("user_id") @db.Uuid
+  content   String?   @db.Text
+  notes     String?   @db.Text
+  createdAt DateTime? @map("created_at") @default(now()) @db.Timestamp(6)
+
+  prompt Prompt? @relation(fields: [promptId], references: [id])
+  user   User?   @relation(fields: [userId], references: [id])
+
+  @@index([promptId], map: "idx_prompt_versions_prompt_id")
+  @@index([userId], map: "idx_prompt_versions_user_id")
+  @@map("prompt_versions")
+}
+
+model PromptRating {
+  id        String    @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  promptId  String?   @map("prompt_id") @db.Uuid
+  userId    String?   @map("user_id") @db.Uuid
+  rating    Int?      @db.Integer
+  comment   String?   @db.Text
+  createdAt DateTime? @map("created_at") @db.Timestamp(6)
+
+  prompt Prompt? @relation(fields: [promptId], references: [id])
+  user   User?   @relation(fields: [userId], references: [id])
+
+  @@index([promptId], map: "idx_prompt_ratings_prompt_id")
+  @@index([userId], map: "idx_prompt_ratings_user_id")
+  @@map("prompt_ratings")
+}
+
+model PromptSale {
+  id           String    @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  promptId     String?   @map("prompt_id") @db.Uuid
+  buyerId      String?   @map("buyer_id") @db.Uuid
+  sellerId     String?   @map("seller_id") @db.Uuid
+  amount       Decimal?  @db.Decimal(10, 2)
+  stripeTxnId  String?   @map("stripe_txn_id") @db.Text
+  createdAt    DateTime? @map("created_at") @db.Timestamp(6)
+
+  prompt Prompt? @relation(fields: [promptId], references: [id])
+  buyer  User?   @relation("PromptSaleBuyer", fields: [buyerId], references: [id])
+  seller User?   @relation("PromptSaleSeller", fields: [sellerId], references: [id])
+
+  @@index([promptId], map: "idx_prompt_sales_prompt_id")
+  @@index([buyerId], map: "idx_prompt_sales_buyer_id")
+  @@index([sellerId], map: "idx_prompt_sales_seller_id")
+  @@index([stripeTxnId], map: "idx_prompt_sales_txn_id")
+  @@map("prompt_sales")
+}
+
+model Purchase {
+  id        String    @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  buyerId   String    @map("buyer_id") @db.Uuid
+  sellerId  String    @map("seller_id") @db.Uuid
+  promptId  String    @map("prompt_id") @db.Uuid
+  price     Int       @db.Integer
+  createdAt DateTime? @map("created_at") @default(now()) @db.Timestamp(6)
+
+  prompt Prompt @relation(fields: [promptId], references: [id])
+  buyer  User   @relation("PurchaseBuyer", fields: [buyerId], references: [id])
+  seller User   @relation("PurchaseSeller", fields: [sellerId], references: [id])
+
+  @@unique([buyerId, promptId], map: "purchases_buyer_prompt_unique")
+  @@index([buyerId], map: "idx_purchases_buyer_id")
+  @@index([sellerId], map: "idx_purchases_seller_id")
+  @@index([promptId], map: "idx_purchases_prompt_id")
+  @@map("purchases")
+}
+
+model StripeEvent {
+  eventId   String    @id @map("event_id") @db.Text
+  type      String?   @db.Text
+  createdAt DateTime? @map("created_at") @default(now()) @db.Timestamptz(6)
+
+  @@map("stripe_events")
+}
+
+model Payout {
+  id                String    @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  sellerId          String    @map("seller_id") @db.Uuid
+  amount            Decimal   @db.Decimal(10, 2)
+  currency          String?   @default("usd") @db.Text
+  stripeTransferId  String?   @map("stripe_transfer_id") @db.Text
+  destinationAccount String?  @map("destination_account") @db.Text
+  createdAt         DateTime? @map("created_at") @default(now()) @db.Timestamptz(6)
+
+  seller User @relation(fields: [sellerId], references: [id])
+
+  @@unique([stripeTransferId], map: "idx_payouts_transfer_id")
+  @@index([sellerId], map: "idx_payouts_seller_id")
+  @@map("payouts")
+}
+
+model Swap {
+  id                 String    @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  requesterId        String?   @map("requester_id") @db.Uuid
+  responderId        String?   @map("responder_id") @db.Uuid
+  requestedPromptId  String?   @map("requested_prompt_id") @db.Uuid
+  offeredPromptId    String?   @map("offered_prompt_id") @db.Uuid
+  status             String?   @default("pending") @db.Text
+  createdAt          DateTime? @map("created_at") @db.Timestamp(6)
+
+  requester       User?   @relation("SwapRequester", fields: [requesterId], references: [id])
+  responder       User?   @relation("SwapResponder", fields: [responderId], references: [id])
+  requestedPrompt Prompt? @relation("RequestedPrompt", fields: [requestedPromptId], references: [id])
+  offeredPrompt   Prompt? @relation("OfferedPrompt", fields: [offeredPromptId], references: [id])
+
+  @@index([requesterId], map: "idx_swaps_requester_id")
+  @@index([responderId], map: "idx_swaps_responder_id")
+  @@index([requestedPromptId], map: "idx_swaps_requested_prompt_id")
+  @@index([offeredPromptId], map: "idx_swaps_offered_prompt_id")
+  @@index([status], map: "idx_swaps_status")
+  @@map("swaps")
+}
+
+model TestRun {
+  id         String    @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  promptId   String?   @map("prompt_id") @db.Uuid
+  userId     String?   @map("user_id") @db.Uuid
+  inputData  Json?     @map("input_data") @db.JsonB
+  outputData Json?     @map("output_data") @db.JsonB
+  modelUsed  String?   @map("model_used") @db.Text
+  createdAt  DateTime? @map("created_at") @db.Timestamp(6)
+
+  prompt Prompt? @relation(fields: [promptId], references: [id])
+  user   User?   @relation(fields: [userId], references: [id])
+
+  @@index([promptId], map: "idx_test_runs_prompt_id")
+  @@index([userId], map: "idx_test_runs_user_id")
+  @@map("test_runs")
+}
+
+model StripeSubscription {
+  id                    String    @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  userId                String?   @map("user_id") @db.Uuid
+  productId             String?   @map("product_id") @db.Uuid
+  stripeSubscriptionId  String?   @map("stripe_subscription_id") @db.Text
+  status                String?   @db.Text
+  currentPeriodEnd      DateTime? @map("current_period_end") @db.Timestamp(6)
+  createdAt             DateTime? @map("created_at") @default(now()) @db.Timestamp(6)
+
+  user    User?    @relation(fields: [userId], references: [id])
+  product Product? @relation(fields: [productId], references: [id])
+
+  @@map("stripe_subscriptions")
+}
+
+model AppError {
+  id        String    @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  message   String    @db.Text
+  stack     String?   @db.Text
+  metadata  Json?     @db.JsonB
+  createdAt DateTime? @map("created_at") @default(now()) @db.Timestamptz(6)
+
+  @@map("app_errors")
 }

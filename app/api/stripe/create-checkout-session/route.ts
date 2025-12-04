@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import Stripe from 'stripe';
+import { cookies } from 'next/headers';
 import { createClient } from '@supabase/supabase-js';
+import { createRouteHandlerClient } from '@supabase/auth-helpers-nextjs';
 
 export const runtime = 'nodejs';
 
@@ -17,15 +19,8 @@ if (!supabaseUrl || !supabaseServiceKey) {
   throw new Error('Supabase service role credentials are required.');
 }
 
-const stripe = new Stripe(stripeSecretKey, { apiVersion: '2023-08-16' });
+const stripe = new Stripe(stripeSecretKey, { apiVersion: '2024-11-15' });
 const supabaseAdmin = createClient(supabaseUrl, supabaseServiceKey);
-
-type CreateSessionBody = {
-  prompt_id?: string;
-  title?: string;
-  price?: number;
-  user_id?: string;
-};
 
 const rateLimitWindowMs = 60_000;
 const rateLimitMax = 5;
@@ -50,24 +45,44 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'rate_limited' }, { status: 429 });
     }
 
-    const { prompt_id, title, price, user_id } = (await req.json()) as CreateSessionBody;
-    if (!prompt_id || !title || price === undefined || price === null || !user_id) {
-      return NextResponse.json(
-        { error: 'prompt_id, title, price, and user_id are required' },
-        { status: 400 },
-      );
+    const { prompt_id } = (await req.json()) as { prompt_id?: string };
+    if (!prompt_id) {
+      return NextResponse.json({ error: 'prompt_id is required' }, { status: 400 });
     }
 
-    const numericPrice = Number(price);
-    if (!Number.isFinite(numericPrice) || numericPrice <= 0) {
-      return NextResponse.json({ error: 'Price must be a positive number.' }, { status: 400 });
+    const supabase = createRouteHandlerClient({ cookies });
+    const { data: sessionData, error: sessionError } = await supabase.auth.getSession();
+    const buyerId = sessionData?.session?.user?.id ?? null;
+    if (sessionError || !buyerId) {
+      return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
     }
 
-    // Prevent duplicate purchases
+    const { data: prompt, error: promptError } = await supabaseAdmin
+      .from('prompts')
+      .select('id, title, price, user_id, is_public')
+      .eq('id', prompt_id)
+      .maybeSingle();
+
+    if (promptError) {
+      console.error('Checkout prompt lookup failed', promptError);
+      return NextResponse.json({ error: 'prompt_lookup_failed' }, { status: 500 });
+    }
+    if (!prompt) {
+      return NextResponse.json({ error: 'prompt_not_found' }, { status: 404 });
+    }
+    if (!prompt.is_public && prompt.user_id !== buyerId) {
+      return NextResponse.json({ error: 'prompt_not_available' }, { status: 403 });
+    }
+
+    const priceInCents = Math.round(Number(prompt.price ?? 0) * 100);
+    if (!Number.isFinite(priceInCents) || priceInCents <= 0) {
+      return NextResponse.json({ error: 'invalid_price' }, { status: 400 });
+    }
+
     const { data: existing, error: existingError } = await supabaseAdmin
       .from('purchases')
       .select('id')
-      .eq('buyer_id', user_id)
+      .eq('buyer_id', buyerId)
       .eq('prompt_id', prompt_id)
       .maybeSingle();
     if (existingError) {
@@ -78,10 +93,20 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'already_owned' }, { status: 400 });
     }
 
-    // Ensure price is in cents; if a non-integer is provided, treat it as dollars.
-    const priceInCents = Number.isInteger(numericPrice)
-      ? numericPrice
-      : Math.round(numericPrice * 100);
+    const { data: sellerProfile } = await supabaseAdmin
+      .from('profiles')
+      .select('connected_account_id, stripe_account_id')
+      .eq('id', prompt.user_id)
+      .maybeSingle();
+
+    const connectDestination =
+      sellerProfile?.connected_account_id || sellerProfile?.stripe_account_id || undefined;
+
+    const metadata = {
+      prompt_id: prompt.id,
+      buyer_id: buyerId,
+      seller_id: prompt.user_id,
+    };
 
     const session = await stripe.checkout.sessions.create({
       payment_method_types: ['card'],
@@ -90,15 +115,23 @@ export async function POST(req: NextRequest) {
         {
           price_data: {
             currency: 'usd',
-            product_data: { name: title },
+            product_data: { name: prompt.title },
             unit_amount: priceInCents,
           },
           quantity: 1,
         },
       ],
-      success_url: `${siteUrl}/checkout/success?prompt_id=${encodeURIComponent(prompt_id)}`,
-      cancel_url: `${siteUrl}/marketplace/${encodeURIComponent(prompt_id)}`,
-      metadata: { prompt_id, user_id },
+      success_url: `${siteUrl}/checkout/success?prompt_id=${encodeURIComponent(prompt.id)}`,
+      cancel_url: `${siteUrl}/marketplace/${encodeURIComponent(prompt.id)}`,
+      metadata,
+      payment_intent_data: {
+        metadata,
+        ...(connectDestination
+          ? {
+              transfer_data: { destination: connectDestination },
+            }
+          : {}),
+      },
     });
 
     return NextResponse.json({ url: session.url });
