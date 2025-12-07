@@ -1,10 +1,12 @@
 generator client {
   provider = "prisma-client-js"
+  previewFeatures = ["multiSchema"]
 }
 
 datasource db {
   provider = "postgresql"
   url      = env("DATABASE_URL")
+  schemas  = ["public", "auth"]
 }
 
 model User {
@@ -46,6 +48,7 @@ model Profile {
   user User @relation(fields: [id], references: [id])
 
   @@map("profiles")
+  @@schema("public")
 }
 
 model Product {
@@ -61,6 +64,7 @@ model Product {
   stripeSubscriptions StripeSubscription[]
 
   @@map("products")
+  @@schema("public")
 }
 
 model PromptTemplate {
@@ -73,6 +77,7 @@ model PromptTemplate {
   user User? @relation(fields: [userId], references: [id])
 
   @@map("prompt_templates")
+  @@schema("public")
 }
 
 model Prompt {
@@ -80,7 +85,7 @@ model Prompt {
   userId       String?     @map("user_id") @db.Uuid
   title        String      @db.Text
   description  String?     @db.Text
-  tags         String[]?   @db.Text[]
+  tags         String[]    @db.Text
   price        Decimal?    @db.Decimal(10, 2)
   promptText   String      @map("prompt_text") @db.Text
   previewImage String?     @map("preview_image") @db.Text
@@ -100,6 +105,7 @@ model Prompt {
   @@index([userId], map: "idx_prompts_user_id")
   @@index([isPublic], map: "idx_prompts_public")
   @@map("prompts")
+  @@schema("public")
 }
 
 model PromptVersion {
@@ -116,6 +122,7 @@ model PromptVersion {
   @@index([promptId], map: "idx_prompt_versions_prompt_id")
   @@index([userId], map: "idx_prompt_versions_user_id")
   @@map("prompt_versions")
+  @@schema("public")
 }
 
 model PromptRating {
@@ -132,6 +139,7 @@ model PromptRating {
   @@index([promptId], map: "idx_prompt_ratings_prompt_id")
   @@index([userId], map: "idx_prompt_ratings_user_id")
   @@map("prompt_ratings")
+  @@schema("public")
 }
 
 model PromptSale {
@@ -152,6 +160,7 @@ model PromptSale {
   @@index([sellerId], map: "idx_prompt_sales_seller_id")
   @@index([stripeTxnId], map: "idx_prompt_sales_txn_id")
   @@map("prompt_sales")
+  @@schema("public")
 }
 
 model Purchase {
@@ -171,6 +180,7 @@ model Purchase {
   @@index([sellerId], map: "idx_purchases_seller_id")
   @@index([promptId], map: "idx_purchases_prompt_id")
   @@map("purchases")
+  @@schema("public")
 }
 
 model StripeEvent {
@@ -179,6 +189,7 @@ model StripeEvent {
   createdAt DateTime? @map("created_at") @default(now()) @db.Timestamptz(6)
 
   @@map("stripe_events")
+  @@schema("public")
 }
 
 model Payout {
@@ -195,6 +206,7 @@ model Payout {
   @@unique([stripeTransferId], map: "idx_payouts_transfer_id")
   @@index([sellerId], map: "idx_payouts_seller_id")
   @@map("payouts")
+  @@schema("public")
 }
 
 model Swap {
@@ -217,6 +229,7 @@ model Swap {
   @@index([offeredPromptId], map: "idx_swaps_offered_prompt_id")
   @@index([status], map: "idx_swaps_status")
   @@map("swaps")
+  @@schema("public")
 }
 
 model TestRun {
@@ -234,6 +247,7 @@ model TestRun {
   @@index([promptId], map: "idx_test_runs_prompt_id")
   @@index([userId], map: "idx_test_runs_user_id")
   @@map("test_runs")
+  @@schema("public")
 }
 
 model StripeSubscription {
@@ -249,6 +263,7 @@ model StripeSubscription {
   product Product? @relation(fields: [productId], references: [id])
 
   @@map("stripe_subscriptions")
+  @@schema("public")
 }
 
 model AppError {
@@ -259,4 +274,31 @@ model AppError {
   createdAt DateTime? @map("created_at") @default(now()) @db.Timestamptz(6)
 
   @@map("app_errors")
+  @@schema("public")
+}
+
+model ChatSession {
+  id        String       @id @default(uuid())
+  userId    String?      @map("user_id")     // Supabase auth.users.id (optional)
+  title     String?
+  createdAt DateTime     @default(now()) @map("created_at")
+
+  messages  ChatMessage[]
+
+  @@schema("public")
+  @@map("chat_sessions")
+}
+
+model ChatMessage {
+  id        String       @id @default(uuid())
+  sessionId String       @map("session_id")
+  role      String                              // 'user' | 'assistant' | 'system'
+  content   String
+  createdAt DateTime     @default(now()) @map("created_at")
+
+  session   ChatSession  @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@schema("public")
+  @@index([sessionId, createdAt])
+  @@map("chat_messages")
 }
