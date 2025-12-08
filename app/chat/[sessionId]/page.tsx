@@ -6,14 +6,22 @@ import {
 } from "./actions";
 import { ChatUI } from "@/components/ChatUI";
 
-type ChatPageProps = {
-  params: { sessionId: string };
-};
+// In Next.js 16 with Turbopack, `params` is a Promise and must be awaited.
+type ChatPageParams = Promise<{ sessionId: string }>;
 
 export const dynamic = "force-dynamic";
 
-export default async function ChatPage({ params }: ChatPageProps) {
-  const { sessionId } = params;
+export default async function ChatPage({
+  params,
+}: {
+  params: ChatPageParams;
+}) {
+  // ✅ Unwrap the params Promise before using sessionId
+  const { sessionId } = await params;
+
+  if (!sessionId) {
+    throw new Error("Missing sessionId");
+  }
 
   const data = await getChatSessionWithMessages(sessionId);
 

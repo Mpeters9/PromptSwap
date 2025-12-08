@@ -1,202 +1,182 @@
 // server.js
-// Custom Node.js server that:
-// - Runs Next.js dev/production server
-// - Hosts a WebSocket server at /api/realtime using `ws`
+const http = require("http");
+const { WebSocketServer } = require("ws");
+const next = require("next");
+const { parse } = require("url");
 
-const { createServer } = require('http');
-const { parse } = require('url');
-const next = require('next');
-const { WebSocketServer } = require('ws');
-const { randomUUID } = require('crypto');
-
-const dev = process.env.NODE_ENV !== 'production';
-const port = parseInt(process.env.PORT || '3000', 10);
-
-const app = next({ dev });
+const dev = process.env.NODE_ENV !== "production";
+const app = next({ dev, dir: __dirname });
 const handle = app.getRequestHandler();
 
-// Next.js exposes an upgrade handler for its own WebSockets (HMR, etc.)
-let nextUpgradeHandler = null;
+// Optional: log unhandled rejections instead of crash with ENOENT
+process.on("unhandledRejection", (reason) => {
+  console.error("Unhandled Rejection:", reason);
+});
 
-app.prepare().then(() => {
-  if (typeof app.getUpgradeHandler === 'function') {
-    nextUpgradeHandler = app.getUpgradeHandler();
-  }
+app
+  .prepare()
+  .then(() => {
+    const server = http.createServer(async (req, res) => {
+      try {
+        const parsedUrl = parse(req.url, true);
 
-  const server = createServer((req, res) => {
-    const parsedUrl = parse(req.url || '/', true);
-    handle(req, res, parsedUrl);
-  });
-
-  // WebSocket server for /api/realtime
-  const wss = new WebSocketServer({ noServer: true });
-
-  /**
-   * Basic structured protocol:
-   * { type: "ping" | "signal" | "client-event" | ..., sessionId?: string, payload?: any }
-   */
-  wss.on('connection', (ws, request) => {
-    const { pathname, query } = parse(request.url || '/', true);
-    const sessionId = query?.sessionId;
-    const connectionId = randomUUID();
-
-    console.log('[realtime] ws client connected', {
-      pathname,
-      sessionId,
-      connectionId,
+        // We only handle WebSocket for /api/realtime in the upgrade handler below.
+        // For normal HTTP requests, just let Next.js handle everything.
+        return handle(req, res, parsedUrl);
+      } catch (err) {
+        console.error("[http] request error:", err);
+        res.statusCode = 500;
+        res.end("Internal server error");
+      }
     });
 
-    // Send welcome
-    ws.send(
-      JSON.stringify({
-        type: 'welcome',
+    // --- WebSocket server for /api/realtime --- //
+    const wss = new WebSocketServer({ noServer: true });
+
+    // In-memory map of connections by sessionId (for now, just echo-style behavior)
+    const sessions = new Map();
+
+    wss.on("connection", (ws, request, clientInfo) => {
+      const { pathname, searchParams } = clientInfo;
+      const sessionId = searchParams.get("sessionId") || "unknown";
+      const connectionId = clientInfo.connectionId;
+
+      console.log("[realtime] ws client connected", {
+        pathname,
+        sessionId,
+        connectionId,
+      });
+
+      // Track sessions in memory (simple fan-out hook later if needed)
+      if (!sessions.has(sessionId)) {
+        sessions.set(sessionId, new Set());
+      }
+      sessions.get(sessionId).add(ws);
+
+      // On open, send a welcome message
+      const welcome = {
+        type: "welcome",
         sessionId,
         payload: {
           connectionId,
-          message: 'Connected to /api/realtime via custom WebSocket server',
+          message: "Connected to /api/realtime via custom WebSocket server",
         },
-      })
-    );
+      };
+      ws.send(JSON.stringify(welcome));
 
-    ws.on('message', (data) => {
-      let text = '';
+      ws.on("message", (data) => {
+        try {
+          const text = data.toString();
+          console.log("[realtime] raw message text =", text);
 
-      if (Buffer.isBuffer(data)) {
-        text = data.toString('utf8');
-      } else if (typeof data === 'string') {
-        text = data;
-      } else {
-        text = String(data);
-      }
+          let parsed;
+          try {
+            parsed = JSON.parse(text);
+          } catch (err) {
+            console.error("[realtime] failed to parse JSON:", err);
+            return;
+          }
 
-      console.log('[realtime] raw message text =', text);
+          const msg = {
+            connectionId,
+            sessionId: parsed.sessionId || sessionId,
+            type: parsed.type,
+            payload: parsed.payload ?? null,
+          };
 
-      let msg;
+          console.log("[realtime] parsed message", msg);
+
+          // Simple router for basic testing (ping/signal/client-event)
+          if (msg.type === "ping") {
+            const pong = {
+              type: "server-event",
+              sessionId: msg.sessionId,
+              payload: { kind: "pong", ts: Date.now() },
+            };
+            ws.send(JSON.stringify(pong));
+          } else if (msg.type === "signal") {
+            console.log("[realtime] signal payload", msg.payload);
+            const ack = {
+              type: "server-event",
+              sessionId: msg.sessionId,
+              payload: { kind: "signal-ack", ts: Date.now() },
+            };
+            ws.send(JSON.stringify(ack));
+          } else if (msg.type === "client-event") {
+            console.log("[realtime] client-event payload", msg.payload);
+            const ack = {
+              type: "server-event",
+              sessionId: msg.sessionId,
+              payload: { kind: "client-event-ack", ts: Date.now() },
+            };
+            ws.send(JSON.stringify(ack));
+          } else {
+            console.log("[realtime] unknown message type:", msg.type);
+          }
+        } catch (err) {
+          console.error("[realtime] message handler error:", err);
+        }
+      });
+
+      ws.on("close", () => {
+        console.log("[realtime] ws client disconnected", { sessionId, connectionId });
+        const set = sessions.get(sessionId);
+        if (set) {
+          set.delete(ws);
+          if (set.size === 0) {
+            sessions.delete(sessionId);
+          }
+        }
+      });
+
+      ws.on("error", (err) => {
+        console.error("[realtime] ws error:", err);
+      });
+    });
+
+    // Upgrade HTTP → WebSocket for /api/realtime
+    server.on("upgrade", (req, socket, head) => {
       try {
-        msg = JSON.parse(text);
+        const url = new URL(req.url, `http://${req.headers.host}`);
+        const pathname = url.pathname;
+
+        if (pathname === "/api/realtime") {
+          const searchParams = url.searchParams;
+          const connectionId = cryptoRandomId();
+
+          wss.handleUpgrade(req, socket, head, (ws) => {
+            wss.emit("connection", ws, req, {
+              pathname,
+              searchParams,
+              connectionId,
+            });
+          });
+        } else {
+          socket.destroy();
+        }
       } catch (err) {
-        console.warn('[realtime] invalid JSON', err);
-        ws.send(
-          JSON.stringify({
-            type: 'error',
-            sessionId,
-            payload: { error: 'INVALID_JSON' },
-          })
-        );
-        return;
-      }
-
-      if (!msg || typeof msg.type !== 'string') {
-        console.warn('[realtime] missing type on message');
-        ws.send(
-          JSON.stringify({
-            type: 'error',
-            sessionId,
-            payload: { error: 'INVALID_MESSAGE' },
-          })
-        );
-        return;
-      }
-
-      const effectiveSessionId = msg.sessionId || sessionId;
-
-      console.log('[realtime] parsed message', {
-        connectionId,
-        sessionId: effectiveSessionId,
-        type: msg.type,
-      });
-
-      switch (msg.type) {
-        case 'ping': {
-          ws.send(
-            JSON.stringify({
-              type: 'server-event',
-              sessionId: effectiveSessionId,
-              payload: { kind: 'pong', ts: Date.now() },
-            })
-          );
-          break;
-        }
-
-        case 'signal': {
-          // Placeholder for WebRTC signaling (SDP, ICE, etc.)
-          console.log('[realtime] signal payload', msg.payload);
-          ws.send(
-            JSON.stringify({
-              type: 'server-event',
-              sessionId: effectiveSessionId,
-              payload: { kind: 'signal-ack', ts: Date.now() },
-            })
-          );
-          break;
-        }
-
-        case 'client-event': {
-          console.log('[realtime] client-event payload', msg.payload);
-          ws.send(
-            JSON.stringify({
-              type: 'server-event',
-              sessionId: effectiveSessionId,
-              payload: { kind: 'client-event-ack', ts: Date.now() },
-            })
-          );
-          break;
-        }
-
-        default: {
-          console.warn('[realtime] unknown type', msg.type);
-          ws.send(
-            JSON.stringify({
-              type: 'error',
-              sessionId: effectiveSessionId,
-              payload: {
-                error: 'UNKNOWN_TYPE',
-                detail: msg.type,
-              },
-            })
-          );
-        }
+        console.error("[server] upgrade error:", err);
+        socket.destroy();
       }
     });
 
-    ws.on('close', (code, reason) => {
-      console.log('[realtime] ws closed', {
-        connectionId,
-        sessionId,
-        code,
-        reason: reason?.toString(),
-      });
+    const port = process.env.PORT || 3000;
+    server.listen(port, () => {
+      console.log(
+        `> Custom Next.js server with WebSocket listening on http://localhost:${port}`
+      );
     });
-
-    ws.on('error', (err) => {
-      console.error('[realtime] ws error', { connectionId, sessionId }, err);
-    });
+  })
+  .catch((err) => {
+    console.error("Error preparing Next.js app:", err);
+    process.exit(1);
   });
 
-  // Handle HTTP → WebSocket upgrades
-  server.on('upgrade', (req, socket, head) => {
-    const { pathname } = parse(req.url || '/', true);
-
-    // Let Next handle its own dev WebSocket (HMR)
-    if (pathname === '/_next/webpack-hmr' && nextUpgradeHandler) {
-      return nextUpgradeHandler(req, socket, head);
-    }
-
-    // Our custom realtime WebSocket endpoint
-    if (pathname === '/api/realtime') {
-      wss.handleUpgrade(req, socket, head, (ws) => {
-        wss.emit('connection', ws, req);
-      });
-      return;
-    }
-
-    // Anything else: reject upgrade
-    socket.destroy();
-  });
-
-  server.listen(port, () => {
-    console.log(
-      `> Custom Next.js server with WebSocket listening on http://localhost:${port}`
-    );
-  });
-});
+// Simple random id helper for connectionId
+function cryptoRandomId() {
+  return (
+    Date.now().toString(36) +
+    "-" +
+    Math.random().toString(36).slice(2, 10)
+  );
+}
