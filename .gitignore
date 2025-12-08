@@ -39,3 +39,15 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# --- Environment files (secrets, DO NOT COMMIT) ---
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# If you ever accidentally commit these, you MUST:
+#  1) Delete them from the repo history (or at least from the latest commit)
+#  2) Rotate your Supabase, Stripe, OpenAI keys in their dashboards
+#  3) Update local .env / .env.local with the new keys

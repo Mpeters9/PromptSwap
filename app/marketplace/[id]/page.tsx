@@ -112,7 +112,14 @@ export default async function PromptDetailPage({ params }: { params: { id: strin
 
             <div className="flex flex-col items-end gap-3">
               <Badge className="bg-indigo-600 text-white hover:bg-indigo-700">{priceLabel}</Badge>
-              <BuyButton promptId={prompt.id} title={prompt.title} price={Number(prompt.price ?? 0)} />
+              <BuyButton
+                promptId={prompt.id}
+                title={prompt.title}
+                price={Number(prompt.price ?? 0)}
+                userId={null}
+                isCreator={false}
+                hasPurchased={false}
+              />
             </div>
           </div>
 

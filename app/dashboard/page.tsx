@@ -1,19 +1,27 @@
 import { listChatSessions, createChatSession } from "./actions";
 import { SessionList } from "@/components/SessionList";
+import { getCurrentUser } from "@/lib/supabase-server";
 
 export const dynamic = "force-dynamic";
 
 export default async function DashboardPage() {
-  // TODO: later we'll pass the Supabase user id here.
-  const sessions = await listChatSessions();
+  const user = await getCurrentUser();
+
+  // If not logged in, you can either redirect to /signin or just show empty.
+  // For now we'll just show an empty list if no user.
+  const userId = user?.id ?? null;
+
+  const sessions = await listChatSessions(userId);
 
   // Server action wrapper for the "New chat" form.
-  // We keep this inline so it can call createChatSession and revalidate the page.
   async function createSessionAction() {
     "use server";
-    await createChatSession({});
+
+    const innerUser = await getCurrentUser();
+    const innerUserId = innerUser?.id ?? null;
+
+    await createChatSession({ userId: innerUserId });
     // We rely on createChatSession's revalidatePath("/dashboard")
-    // to refresh the session list. No redirect yet.
   }
 
   return (

@@ -183,6 +183,19 @@ model Purchase {
   @@schema("public")
 }
 
+model PromptView {
+  id        String   @id @default(uuid())
+  promptId  String
+  viewerId  String?
+  createdAt DateTime @default(now())
+
+  prompt Prompt @relation(fields: [promptId], references: [id])
+
+  @@index([promptId, createdAt])
+  @@index([viewerId, createdAt])
+  @@schema("public")
+}
+
 model StripeEvent {
   eventId   String    @id @map("event_id") @db.Text
   type      String?   @db.Text

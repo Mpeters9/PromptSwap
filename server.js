@@ -140,6 +140,7 @@ app
         const url = new URL(req.url, `http://${req.headers.host}`);
         const pathname = url.pathname;
 
+        // ✅ ONLY intercept /api/realtime
         if (pathname === "/api/realtime") {
           const searchParams = url.searchParams;
           const connectionId = cryptoRandomId();
@@ -151,12 +152,22 @@ app
               connectionId,
             });
           });
-        } else {
-          socket.destroy();
+
+          // We handled this upgrade, so return.
+          return;
         }
+
+        // ❗ For ALL OTHER upgrade paths (e.g. /_next/webpack-hmr),
+        // DO NOTHING here and let Next.js's internal upgrade handler
+        // take over. DO NOT destroy the socket.
+        return;
       } catch (err) {
         console.error("[server] upgrade error:", err);
-        socket.destroy();
+        try {
+          socket.destroy();
+        } catch {
+          // ignore
+        }
       }
     });
 

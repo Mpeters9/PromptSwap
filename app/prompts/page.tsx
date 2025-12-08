@@ -1,255 +1,438 @@
-import Link from 'next/link';
+// app/prompts/page.tsx
+import Link from "next/link";
 
-import { supabase } from '@/lib/supabase';
+import { prisma } from "@/lib/prisma";
+import { getCurrentUser } from "@/lib/supabase-server";
+import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { PromptPreviewImage } from "@/components/PromptPreviewImage";
 
-type PromptRow = {
-  id: string;
-  title: string;
-  description: string | null;
-  tags: string[] | null;
-  price: number | null;
-  preview_image: string | null;
-  created_at: string;
+type SearchParams = {
+  q?: string | string[];
+  priceFilter?: string | string[];
+  minPrice?: string | string[];
+  maxPrice?: string | string[];
+  minRating?: string | string[];
+  tag?: string | string[];
+  sort?: string | string[];
 };
 
-type PopularityCount = {
-  prompt_id: string;
-  count: number | null;
-};
+export const dynamic = "force-dynamic";
 
-type PromptWithPopularity = PromptRow & { popularity: number };
+export default async function PromptsIndexPage({
+  searchParams,
+}: {
+  searchParams: SearchParams;
+}) {
+  const currentUser = await getCurrentUser();
+  const currentUserId = currentUser?.id ?? null;
 
-async function fetchPrompts(): Promise<{ prompts: PromptRow[]; error?: string }> {
-  const { data, error } = await supabase
-    .from('prompts')
-    .select('id, title, description, tags, price, preview_image, created_at')
-    .eq('is_public', true)
-    .order('created_at', { ascending: false });
+  // ---- Read search params (normalize to strings) ----
+  const q = typeof searchParams.q === "string" ? searchParams.q.trim() : "";
+  const priceFilter =
+    typeof searchParams.priceFilter === "string"
+      ? searchParams.priceFilter
+      : "all";
+  const minPriceRaw =
+    typeof searchParams.minPrice === "string" ? searchParams.minPrice : "";
+  const maxPriceRaw =
+    typeof searchParams.maxPrice === "string" ? searchParams.maxPrice : "";
+  const minRatingRaw =
+    typeof searchParams.minRating === "string" ? searchParams.minRating : "";
+  const tag = typeof searchParams.tag === "string" ? searchParams.tag.trim() : "";
+  const sort =
+    typeof searchParams.sort === "string" ? searchParams.sort : "latest";
 
-  if (error) {
-    return { prompts: [], error: error.message };
+  const minPrice = minPriceRaw ? parseFloat(minPriceRaw) : undefined;
+  const maxPrice = maxPriceRaw ? parseFloat(maxPriceRaw) : undefined;
+  const minRating = minRatingRaw ? parseFloat(minRatingRaw) : undefined;
+
+  // ---- Build Prisma `where` filters (except minRating, which we apply after) ----
+  const where: any = {
+    isPublic: true,
+  };
+
+  if (q) {
+    where.OR = [
+      { title: { contains: q, mode: "insensitive" } },
+      { description: { contains: q, mode: "insensitive" } },
+    ];
   }
 
-  return { prompts: data ?? [] };
-}
-
-async function fetchPopularity(): Promise<Record<string, number>> {
-  const popularity: Record<string, number> = {};
-
-  const [{ data: ratings }, { data: tests }] = await Promise.all([
-    supabase
-      .from('prompt_ratings')
-      .select('prompt_id, count:prompt_id', { group: 'prompt_id' }) as Promise<{
-        data: PopularityCount[] | null;
-      }>,
-    supabase
-      .from('test_runs')
-      .select('prompt_id, count:prompt_id', { group: 'prompt_id' }) as Promise<{
-        data: PopularityCount[] | null;
-      }>,
-  ]);
-
-  ratings?.forEach(({ prompt_id, count }) => {
-    popularity[prompt_id] = (popularity[prompt_id] ?? 0) + (count ?? 0);
-  });
-
-  tests?.forEach(({ prompt_id, count }) => {
-    popularity[prompt_id] = (popularity[prompt_id] ?? 0) + (count ?? 0);
-  });
-
-  return popularity;
-}
-
-function applyFilters(
-  prompts: PromptWithPopularity[],
-  params: { q: string; price: string; sort: string },
-): PromptWithPopularity[] {
-  const query = params.q.trim().toLowerCase();
-  const filtered = prompts.filter((p) => {
-    const matchesQuery =
-      !query ||
-      p.title.toLowerCase().includes(query) ||
-      (p.tags ?? []).some((tag) => tag.toLowerCase().includes(query));
-
-    const matchesPrice =
-      params.price === 'all'
-        ? true
-        : params.price === 'free'
-          ? !p.price || p.price <= 0
-          : !!p.price && p.price > 0;
-
-    return matchesQuery && matchesPrice;
-  });
-
-  if (params.sort === 'popular') {
-    return filtered.sort((a, b) => b.popularity - a.popularity || Date.parse(b.created_at) - Date.parse(a.created_at));
+  if (tag) {
+    // single tag filter for now; later you can expand to comma-separated list
+    where.tags = { has: tag };
   }
 
-  return filtered.sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at));
-}
-
-function formatPrice(price: number | null) {
-  if (!price || price <= 0) return 'Free';
-  return `$${price.toFixed(2)}`;
-}
-
-type PageProps = {
-  searchParams?: Record<string, string | string[] | undefined>;
-};
-
-export default async function PromptsPage({ searchParams }: PageProps) {
-  const q = typeof searchParams?.q === 'string' ? searchParams.q : '';
-  const price = typeof searchParams?.price === 'string' ? searchParams.price : 'all';
-  const sort = typeof searchParams?.sort === 'string' ? searchParams.sort : 'newest';
-
-  const [{ prompts, error }, popularityMap] = await Promise.all([fetchPrompts(), fetchPopularity()]);
-
-  if (error) {
-    return (
-      <div className="mx-auto max-w-5xl px-4 py-16">
-        <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
-          Failed to load prompts: {error}
-        </div>
-      </div>
-    );
+  // Price filter
+  if (priceFilter === "free") {
+    where.price = { equals: 0 };
+  } else if (priceFilter === "paid") {
+    where.price = { gt: 0 };
   }
 
-  const promptsWithPopularity: PromptWithPopularity[] = prompts.map((p) => ({
-    ...p,
-    popularity: popularityMap[p.id] ?? 0,
-  }));
+  if (minPrice !== undefined || maxPrice !== undefined) {
+    where.price = {
+      ...(where.price || {}),
+      ...(minPrice !== undefined ? { gte: minPrice } : {}),
+      ...(maxPrice !== undefined ? { lte: maxPrice } : {}),
+    };
+  }
 
-  const filtered = applyFilters(promptsWithPopularity, { q, price, sort });
+  // DB-level ordering (we'll do more advanced sorting in JS after we have aggregates)
+  let orderBy: any = { createdAt: "desc" };
+  if (sort === "price_asc") {
+    orderBy = { price: "asc" };
+  } else if (sort === "price_desc") {
+    orderBy = { price: "desc" };
+  }
+
+  // ---- Fetch prompts + aggregates in parallel ----
+  const [prompts, purchaseGroups, userPurchases, ratingGroups] =
+    await Promise.all([
+      prisma.prompt.findMany({
+        where,
+        orderBy,
+      }),
+
+      prisma.purchase.groupBy({
+        by: ["promptId"],
+        _count: { promptId: true },
+      }),
+
+      currentUserId
+        ? prisma.purchase.findMany({
+            where: {
+              buyerId: currentUserId,
+            },
+            select: {
+              promptId: true,
+            },
+          })
+        : Promise.resolve([] as { promptId: string }[]),
+
+      prisma.promptRating.groupBy({
+        by: ["promptId"],
+        _avg: { rating: true },
+        _count: { rating: true },
+      }),
+    ]);
+
+  // Maps for quick lookup: sales & ownership
+  const salesByPromptId = new Map<string, number>();
+  for (const row of purchaseGroups) {
+    salesByPromptId.set(row.promptId, row._count.promptId);
+  }
+
+  const ownedPromptIds = new Set<string>();
+  for (const purchase of userPurchases) {
+    ownedPromptIds.add(purchase.promptId);
+  }
+
+  // Rating stats map
+  const ratingStatsByPromptId = new Map<
+    string,
+    { avg: number | null; count: number }
+  >();
+  for (const row of ratingGroups) {
+    ratingStatsByPromptId.set(row.promptId, {
+      avg: row._avg.rating ?? null,
+      count: row._count.rating,
+    });
+  }
+
+  // ---- Apply minRating filter in JS (since Prisma groupBy can't easily do HAVING here) ----
+  let filtered = prompts;
+  if (minRating !== undefined && !Number.isNaN(minRating)) {
+    filtered = filtered.filter((p) => {
+      const stats = ratingStatsByPromptId.get(p.id);
+      if (!stats || stats.avg === null) return false;
+      return stats.avg >= minRating;
+    });
+  }
+
+  // ---- Apply sort on sales/rating in JS when requested ----
+  let sorted = filtered.slice();
+
+  if (sort === "sales") {
+    sorted.sort((a, b) => {
+      const salesA = salesByPromptId.get(a.id) ?? 0;
+      const salesB = salesByPromptId.get(b.id) ?? 0;
+      return salesB - salesA;
+    });
+  } else if (sort === "rating") {
+    sorted.sort((a, b) => {
+      const ra = ratingStatsByPromptId.get(a.id);
+      const rb = ratingStatsByPromptId.get(b.id);
+      const aAvg = ra?.avg ?? 0;
+      const bAvg = rb?.avg ?? 0;
+      if (bAvg === aAvg) {
+        const aCount = ra?.count ?? 0;
+        const bCount = rb?.count ?? 0;
+        return bCount - aCount;
+      }
+      return bAvg - aAvg;
+    });
+  }
+  // For "latest" and price_asc/price_desc, DB orderBy already took care of it.
+
+  const promptsToShow = sorted;
 
   return (
-    <div className="mx-auto max-w-6xl px-4 py-12">
-      <header className="flex flex-col gap-6 sm:flex-row sm:items-end sm:justify-between">
+    <main className="mx-auto flex w/full max-w-5xl flex-col gap-6 px-4 py-8">
+      {/* Header + quick links */}
+      <div className="flex flex-wrap items-baseline justify-between gap-4">
         <div>
-          <h1 className="text-3xl font-semibold text-slate-900">Prompt Marketplace</h1>
-          <p className="mt-2 text-sm text-slate-600">
-            Discover, search, and filter community prompts.
+          <h1 className="text-2xl font-semibold tracking-tight">
+            Prompt marketplace
+          </h1>
+          <p className="text-sm text-muted-foreground">
+            Discover, buy, and test prompts from top creators.
           </p>
         </div>
-        <Link
-          href="/upload"
-          className="inline-flex items-center justify-center rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2"
-        >
-          Upload Prompt
-        </Link>
-      </header>
-
-      <form className="mt-8 grid gap-4 rounded-xl bg-white p-4 shadow-sm ring-1 ring-slate-200 sm:grid-cols-4 sm:items-center">
-        <div className="sm:col-span-2">
-          <label className="sr-only" htmlFor="q">
-            Search
-          </label>
-          <input
-            id="q"
-            name="q"
-            defaultValue={q}
-            placeholder="Search by title or tags..."
-            className="w-full rounded-lg border border-slate-200 bg-slate-50 px-4 py-2 text-sm text-slate-900 shadow-inner focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-100"
-          />
-        </div>
-        <div>
-          <label className="sr-only" htmlFor="price">
-            Price filter
-          </label>
-          <select
-            id="price"
-            name="price"
-            defaultValue={price}
-            className="w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-900 focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-100"
-          >
-            <option value="all">All prices</option>
-            <option value="free">Free</option>
-            <option value="paid">Paid</option>
-          </select>
-        </div>
         <div className="flex gap-2">
-          <label className="sr-only" htmlFor="sort">
-            Sort by
-          </label>
-          <select
-            id="sort"
-            name="sort"
-            defaultValue={sort}
-            className="w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-900 focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-100"
-          >
-            <option value="newest">Newest</option>
-            <option value="popular">Most popular</option>
-          </select>
-          <button
-            type="submit"
-            className="inline-flex items-center justify-center rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-1"
-          >
-            Apply
-          </button>
+          <Button asChild variant="outline" size="sm">
+            <Link href="/purchases">My purchases</Link>
+          </Button>
+          <Button asChild size="sm">
+            <Link href="/creator/prompts">Creator dashboard</Link>
+          </Button>
         </div>
-      </form>
+      </div>
 
-      {filtered.length === 0 ? (
-        <div className="mt-10 rounded-lg border border-slate-200 bg-white px-6 py-10 text-center text-slate-600">
-          No prompts found. Try adjusting your search or filters.
-        </div>
-      ) : (
-        <div className="mt-8 grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
-          {filtered.map((prompt) => (
-            <Link
-              key={prompt.id}
-              href={`/prompts/${prompt.id}`}
-              className="group flex h-full flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm transition hover:-translate-y-1 hover:shadow-md focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2"
+      {/* Search + filters */}
+      <section className="rounded-lg border bg-card p-4">
+        <form className="flex flex-col gap-3 md:flex-row md:flex-wrap md:items-end">
+          <div className="flex-1 min-w-[180px] space-y-1">
+            <label
+              htmlFor="q"
+              className="text-xs font-medium text-muted-foreground"
             >
-              <div className="relative h-40 bg-gradient-to-br from-indigo-50 to-slate-100">
-                {prompt.preview_image ? (
-                  // eslint-disable-next-line @next/next/no-img-element
-                  <img
-                    src={prompt.preview_image}
+              Search
+            </label>
+            <Input
+              id="q"
+              name="q"
+              placeholder="Search by title or description..."
+              defaultValue={q}
+            />
+          </div>
+
+          <div className="w-[150px] space-y-1">
+            <label
+              htmlFor="priceFilter"
+              className="text-xs font-medium text-muted-foreground"
+            >
+              Price
+            </label>
+            <select
+              id="priceFilter"
+              name="priceFilter"
+              defaultValue={priceFilter}
+              className="h-9 w-full rounded-md border border-input bg-background px-2 text-sm"
+            >
+              <option value="all">All</option>
+              <option value="free">Free</option>
+              <option value="paid">Paid</option>
+            </select>
+          </div>
+
+          <div className="w-[130px] space-y-1">
+            <label
+              htmlFor="minPrice"
+              className="text-xs font-medium text-muted-foreground"
+            >
+              Min price
+            </label>
+            <Input
+              id="minPrice"
+              name="minPrice"
+              type="number"
+              step="0.5"
+              min="0"
+              defaultValue={minPriceRaw}
+            />
+          </div>
+
+          <div className="w-[130px] space-y-1">
+            <label
+              htmlFor="maxPrice"
+              className="text-xs font-medium text-muted-foreground"
+            >
+              Max price
+            </label>
+            <Input
+              id="maxPrice"
+              name="maxPrice"
+              type="number"
+              step="0.5"
+              min="0"
+              defaultValue={maxPriceRaw}
+            />
+          </div>
+
+          <div className="w-[130px] space-y-1">
+            <label
+              htmlFor="minRating"
+              className="text-xs font-medium text-muted-foreground"
+            >
+              Min rating
+            </label>
+            <Input
+              id="minRating"
+              name="minRating"
+              type="number"
+              min="1"
+              max="5"
+              step="0.5"
+              defaultValue={minRatingRaw}
+            />
+          </div>
+
+          <div className="w-[150px] space-y-1">
+            <label
+              htmlFor="tag"
+              className="text-xs font-medium text-muted-foreground"
+            >
+              Tag
+            </label>
+            <Input
+              id="tag"
+              name="tag"
+              placeholder="e.g. marketing"
+              defaultValue={tag}
+            />
+          </div>
+
+          <div className="w/[160px] space-y-1">
+            <label
+              htmlFor="sort"
+              className="text-xs font-medium text-muted-foreground"
+            >
+              Sort by
+            </label>
+            <select
+              id="sort"
+              name="sort"
+              defaultValue={sort}
+              className="h-9 w-full rounded-md border border-input bg-background px-2 text-sm"
+            >
+              <option value="latest">Latest</option>
+              <option value="sales">Most sales</option>
+              <option value="rating">Highest rated</option>
+              <option value="price_asc">Price: low to high</option>
+              <option value="price_desc">Price: high to low</option>
+            </select>
+          </div>
+
+          <div className="ml-auto flex gap-2 pt-1">
+            <Button type="submit" size="sm">
+              Apply
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              asChild
+            >
+              <Link href="/prompts">Reset</Link>
+            </Button>
+          </div>
+        </form>
+      </section>
+
+      {/* Results */}
+      {promptsToShow.length === 0 ? (
+        <Card>
+          <CardHeader>
+            <CardTitle>No prompts match your filters</CardTitle>
+            <CardDescription>
+              Try clearing some filters or searching for something else.
+            </CardDescription>
+          </CardHeader>
+        </Card>
+      ) : (
+        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+          {promptsToShow.map((prompt) => {
+            const salesCount = salesByPromptId.get(prompt.id) ?? 0;
+            const isOwned = ownedPromptIds.has(prompt.id);
+            const priceNumber = prompt.price ? Number(prompt.price) : 0;
+            const priceDisplay =
+              priceNumber > 0 ? `$${priceNumber.toFixed(2)}` : "Free";
+
+            const ratingStats = ratingStatsByPromptId.get(prompt.id);
+            const avg = ratingStats?.avg ?? null;
+            const ratingCount = ratingStats?.count ?? 0;
+
+            return (
+              <Link
+                key={prompt.id}
+                href={`/prompts/${prompt.id}`}
+                className="group"
+              >
+                <Card className="flex h-full flex-col transition-all duration-150 hover:-translate-y-1 hover:shadow-lg">
+                  <PromptPreviewImage
+                    src={prompt.previewImage}
                     alt={prompt.title}
-                    className="h-full w-full object-cover"
-                    loading="lazy"
                   />
-                ) : (
-                  <div className="flex h-full items-center justify-center text-sm text-slate-400">
-                    No preview
-                  </div>
-                )}
-                <div className="absolute left-3 top-3 rounded-full bg-white/80 px-3 py-1 text-xs font-medium text-slate-700 shadow-sm">
-                  {formatPrice(prompt.price)}
-                </div>
-              </div>
-              <div className="flex flex-1 flex-col gap-3 p-4">
-                <div className="flex items-start justify-between gap-2">
-                  <h2 className="line-clamp-2 text-base font-semibold text-slate-900 group-hover:text-indigo-700">
-                    {prompt.title}
-                  </h2>
-                  {prompt.popularity > 0 && (
-                    <span className="rounded-full bg-amber-50 px-2 py-1 text-xs font-semibold text-amber-700">
-                      {prompt.popularity} hits
-                    </span>
-                  )}
-                </div>
-                <p className="line-clamp-3 text-sm text-slate-600">
-                  {prompt.description || 'No description provided.'}
-                </p>
-                <div className="mt-auto flex flex-wrap gap-2">
-                  {(prompt.tags ?? []).slice(0, 4).map((tag) => (
-                    <span
-                      key={tag}
-                      className="rounded-full bg-slate-100 px-2 py-1 text-xs font-medium text-slate-700"
-                    >
-                      {tag}
-                    </span>
-                  ))}
-                </div>
-                <div className="text-xs text-slate-500">
-                  Added {new Date(prompt.created_at).toLocaleDateString()}
-                </div>
-              </div>
-            </Link>
-          ))}
+                  <CardHeader className="space-y-2">
+                    <CardTitle className="line-clamp-2 text-base">
+                      {prompt.title}
+                    </CardTitle>
+                    <CardDescription className="line-clamp-2 text-xs">
+                      {prompt.description}
+                    </CardDescription>
+                  </CardHeader>
+                  <CardContent className="mt-auto flex flex-col gap-2 pb-3 text-xs">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Badge
+                        variant="outline"
+                        className="rounded-full bg-white/70 backdrop-blur"
+                      >
+                        {priceDisplay}
+                      </Badge>
+                      {Array.isArray(prompt.tags) &&
+                        prompt.tags.slice(0, 3).map((tagValue) => (
+                          <Badge
+                            key={tagValue}
+                            variant="secondary"
+                            className="rounded-full"
+                          >
+                            #{tagValue}
+                          </Badge>
+                        ))}
+                      {salesCount > 0 && (
+                        <Badge variant="secondary">
+                          {salesCount} sale
+                          {salesCount === 1 ? "" : "s"}
+                        </Badge>
+                      )}
+                    </div>
+
+                    <div className="flex items-center justify-between text-[11px] text-muted-foreground">
+                      {avg !== null && ratingCount > 0 ? (
+                        <span>
+                          {avg.toFixed(1)} / 5 · {ratingCount} rating
+                          {ratingCount === 1 ? "" : "s"}
+                        </span>
+                      ) : (
+                        <span>No ratings yet</span>
+                      )}
+                      {isOwned && (
+                        <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-[11px] font-medium text-emerald-700">
+                          Owned
+                        </span>
+                      )}
+                    </div>
+                  </CardContent>
+                </Card>
+              </Link>
+            );
+          })}
         </div>
       )}
-    </div>
+    </main>
   );
 }
