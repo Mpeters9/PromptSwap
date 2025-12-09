@@ -22,6 +22,18 @@ export default async function EditPromptPage({ params }: EditPageProps) {
 
   const prompt = await prisma.prompt.findUnique({
     where: { id: params.id },
+    select: {
+      id: true,
+      userId: true,
+      title: true,
+      description: true,
+      promptText: true,
+      tags: true,
+      price: true,
+      previewImage: true,
+      isPublic: true,
+      isFeatured: true,
+    },
   });
 
   if (!prompt) {
@@ -61,6 +73,7 @@ export default async function EditPromptPage({ params }: EditPageProps) {
     const priceRaw = (formData.get("price") ?? "").toString();
     const previewImage = (formData.get("preview_image") ?? "").toString().trim();
     const isPublicRaw = formData.get("is_public");
+    const isFeaturedRaw = formData.get("is_featured");
 
     if (!title || !promptText) {
       throw new Error("Title and prompt text are required.");
@@ -74,6 +87,7 @@ export default async function EditPromptPage({ params }: EditPageProps) {
 
     const price = priceRaw ? parseFloat(priceRaw) : 0;
     const isPublic = isPublicRaw === "on";
+    const isFeatured = isFeaturedRaw === "on";
 
     await prisma.prompt.update({
       where: { id: promptId },
@@ -85,6 +99,7 @@ export default async function EditPromptPage({ params }: EditPageProps) {
         price,
         previewImage: previewImage || null,
         isPublic,
+        isFeatured,
       },
     });
 
@@ -199,6 +214,19 @@ export default async function EditPromptPage({ params }: EditPageProps) {
               />
               <Label htmlFor="is_public" className="text-sm font-normal">
                 Make this prompt public in the marketplace
+              </Label>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <Input
+                id="is_featured"
+                name="is_featured"
+                type="checkbox"
+                className="w-4"
+                defaultChecked={!!prompt.isFeatured}
+              />
+              <Label htmlFor="is_featured" className="text-sm font-normal">
+                Feature this prompt on the homepage (you can change this any time)
               </Label>
             </div>
 

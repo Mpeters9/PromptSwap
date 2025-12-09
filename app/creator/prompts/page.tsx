@@ -228,6 +228,7 @@ export default async function CreatorPromptsPage() {
                 : "Free";
             const conversion =
               viewsCount > 0 ? (salesCount / viewsCount) * 100 : 0;
+            const isFeatured = (prompt as any).isFeatured;
 
             return (
               <Card key={prompt.id} className="flex flex-col">
@@ -249,6 +250,14 @@ export default async function CreatorPromptsPage() {
                             {tag}
                           </Badge>
                         ))}
+                      {isFeatured && (
+                        <Badge
+                          variant="secondary"
+                          className="bg-amber-100 text-amber-800 border-amber-200"
+                        >
+                          Featured
+                        </Badge>
+                      )}
                     </div>
                     <div className="flex flex-wrap items-center gap-2 text-muted-foreground">
                       <span>

@@ -4,6 +4,7 @@ import { buffer } from 'micro';
 import { Readable } from 'node:stream';
 import { createClient } from '@supabase/supabase-js';
 import { logError } from '@/lib/logger';
+import { sendCreatorSaleEmail } from '@/lib/email';
 
 export const config = { api: { bodyParser: false } };
 export const runtime = 'nodejs';
@@ -27,6 +28,7 @@ type PromptRow = {
   id: string;
   user_id: string | null;
   price: number | null;
+  title?: string | null;
   prompt_text?: string | null;
 };
 
@@ -79,7 +81,7 @@ async function markEventProcessed(event: Stripe.Event) {
 async function fetchPrompt(promptId: string) {
   const { data, error } = await supabaseAdmin
     .from<PromptRow>('prompts')
-    .select('id, user_id, price, prompt_text')
+    .select('id, user_id, price, prompt_text, title')
     .eq('id', promptId)
     .maybeSingle();
 
@@ -88,6 +90,43 @@ async function fetchPrompt(promptId: string) {
   }
 
   return data ?? null;
+}
+
+type UserContact = {
+  email: string | null;
+  name: string | null;
+};
+
+async function fetchUserContact(userId: string | null | undefined): Promise<UserContact | null> {
+  if (!userId) return null;
+
+  try {
+    const { data, error } = await supabaseAdmin.auth.admin.getUserById(userId);
+
+    if (error || !data?.user) {
+      console.error('Failed to load user for email', error || 'not found');
+      return null;
+    }
+
+    const user = data.user;
+    const metadata = (user.user_metadata ?? {}) as Record<string, unknown>;
+    const name =
+      typeof metadata.full_name === 'string'
+        ? metadata.full_name
+        : typeof metadata.name === 'string'
+        ? metadata.name
+        : typeof metadata.fullName === 'string'
+        ? metadata.fullName
+        : null;
+
+    return {
+      email: user.email ?? null,
+      name,
+    };
+  } catch (err) {
+    console.error('Error fetching user contact', err);
+    return null;
+  }
 }
 
 async function ensurePurchase({
@@ -214,6 +253,30 @@ async function handleCheckoutCompleted(session: Stripe.Checkout.Session) {
 
   if (created) {
     await creditSeller(sellerId ?? prompt.user_id, price);
+  }
+
+  try {
+    const sellerForEmailId = sellerId ?? prompt.user_id;
+    if (sellerForEmailId) {
+      const [sellerContact, buyerContact] = await Promise.all([
+        fetchUserContact(sellerForEmailId),
+        buyerId ? fetchUserContact(buyerId) : Promise.resolve(null),
+      ]);
+
+      if (sellerContact?.email) {
+        const amountForEmail =
+          typeof price === 'number' && Number.isFinite(price) ? price : 0;
+        await sendCreatorSaleEmail({
+          to: sellerContact.email,
+          creatorName: sellerContact.name,
+          promptTitle: prompt.title || 'Prompt',
+          amount: amountForEmail,
+          buyerEmail: buyerContact?.email ?? null,
+        });
+      }
+    }
+  } catch (err) {
+    console.error('Error sending creator sale email:', err);
   }
 }
 

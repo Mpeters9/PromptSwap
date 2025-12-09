@@ -90,6 +90,7 @@ model Prompt {
   promptText   String      @map("prompt_text") @db.Text
   previewImage String?     @map("preview_image") @db.Text
   isPublic     Boolean?    @map("is_public") @default(false) @db.Boolean
+  isFeatured   Boolean?    @map("is_featured") @default(false) @db.Boolean
   version      Int?        @default(1) @db.Integer
   createdAt    DateTime?   @map("created_at") @default(now()) @db.Timestamp(6)
 
@@ -101,6 +102,7 @@ model Prompt {
   swapsRequested Swap[]           @relation("RequestedPrompt")
   swapsOffered   Swap[]           @relation("OfferedPrompt")
   testRuns       TestRun[]
+  views          PromptView[]
 
   @@index([userId], map: "idx_prompts_user_id")
   @@index([isPublic], map: "idx_prompts_public")

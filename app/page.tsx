@@ -37,6 +37,7 @@ export default async function HomePage() {
           price: true,
           tags: true,
           createdAt: true,
+          isFeatured: true,
         },
       }),
       prisma.purchase.groupBy({
@@ -96,8 +97,14 @@ export default async function HomePage() {
     };
   });
 
-  scoredPrompts.sort((a, b) => b.score - a.score);
-  const featuredPrompts = scoredPrompts.slice(0, 6);
+  const manuallyFeatured = scoredPrompts.filter((p) => p.isFeatured);
+  const autoCandidates = scoredPrompts.filter((p) => !p.isFeatured);
+
+  autoCandidates.sort((a, b) => b.score - a.score);
+
+  // Take all manually featured first, then fill slots up to 6 with best auto candidates
+  const combined = [...manuallyFeatured, ...autoCandidates];
+  const featuredPrompts = combined.slice(0, 6);
 
   return (
     <main className="mx-auto flex w-full max-w-5xl flex-col gap-10 px-4 py-10">
@@ -262,6 +269,14 @@ export default async function HomePage() {
                               #{tag}
                             </Badge>
                           ))}
+                        {p.isFeatured && (
+                          <Badge
+                            variant="secondary"
+                            className="rounded-full bg-amber-100 text-amber-800 border-amber-200"
+                          >
+                            Featured
+                          </Badge>
+                        )}
                       </div>
                       <div className="flex items-center justify-between text-[11px] text-muted-foreground">
                         <span>
