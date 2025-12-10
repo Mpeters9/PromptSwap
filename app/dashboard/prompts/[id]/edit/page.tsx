@@ -47,11 +47,11 @@ export default function PromptEditPage() {
         return;
       }
 
-      const { data, error: fetchError } = await supabase
-        .from<PromptRow>('prompts')
-        .select('id, user_id, title, description, category, price, prompt_text')
-        .eq('id', params.id)
-        .single();
+        const { data, error: fetchError } = await supabase
+          .from('prompts')
+          .select('id, user_id, title, description, category, price, prompt_text')
+          .eq('id', params.id)
+          .single();
 
       if (fetchError || !data) {
         setError(fetchError?.message ?? 'Prompt not found.');

@@ -14,7 +14,7 @@ type Variant =
   | "destructive"
   | "link";
 
-type Size = "default" | "sm" | "lg" | "icon";
+type Size = "default" | "sm" | "xs" | "lg" | "icon";
 
 function buttonVariants(opts: { variant?: Variant; size?: Size }) {
   const { variant = "default", size = "default" } = opts;
@@ -54,6 +54,9 @@ function buttonVariants(opts: { variant?: Variant; size?: Size }) {
     case "sm":
       sizeClasses = "h-8 px-2.5 py-1 text-xs";
       break;
+    case "xs":
+      sizeClasses = "h-7 px-2 text-xs";
+      break;
     case "lg":
       sizeClasses = "h-11 px-5 py-2";
       break;
@@ -72,16 +75,32 @@ export interface ButtonProps
   extends React.ButtonHTMLAttributes<HTMLButtonElement> {
   variant?: Variant;
   size?: Size;
+  asChild?: boolean;
 }
 
 export const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
-  ({ className, variant = "default", size = "default", ...props }, ref) => {
+  (
+    { className, variant = "default", size = "default", asChild = false, children, ...props },
+    ref
+  ) => {
+    const classes = cn(buttonVariants({ variant, size }), className);
+
+    if (asChild && React.isValidElement(children)) {
+      return React.cloneElement(children, {
+        className: cn(children.props.className, classes),
+        ref,
+        ...props,
+      });
+    }
+
     return (
       <button
         ref={ref}
-        className={cn(buttonVariants({ variant, size }), className)}
+        className={classes}
         {...props}
-      />
+      >
+        {children}
+      </button>
     );
   }
 );

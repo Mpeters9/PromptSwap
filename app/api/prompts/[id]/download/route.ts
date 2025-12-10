@@ -1,5 +1,6 @@
-import { cookies } from 'next/headers';
+import type { NextRequest } from 'next/server';
 import { NextResponse } from 'next/server';
+import { cookies } from 'next/headers';
 import { createClient } from '@supabase/supabase-js';
 
 export const runtime = 'nodejs';
@@ -8,18 +9,11 @@ const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL?.trim();
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY?.trim();
 const projectRef = supabaseUrl?.replace(/^https?:\/\//, '').split('.')[0];
 
-type PromptRow = {
-  id: string;
-  user_id: string | null;
-  title: string;
-  prompt_text: string | null;
-};
-
-function extractAccessToken(): string | null {
+async function extractAccessToken(): Promise<string | null> {
   if (!projectRef) return null;
-  const cookieStore = cookies();
+  const cookieStore = await cookies();
   const cookieName = `sb-${projectRef}-auth-token`;
-  const value = cookieStore.get(cookieName)?.value ?? cookieStore.get('supabase-auth-token')?.value;
+  const value = cookieStore.get(cookieName)?.value ?? cookieStore.get("supabase-auth-token")?.value;
   if (!value) return null;
 
   try {
@@ -38,12 +32,16 @@ const safeFilename = (title: string | null | undefined) => {
   return `${base || 'prompt'}.txt`;
 };
 
-export async function GET(_: Request, { params }: { params: { id: string } }) {
+export async function GET(
+  _req: NextRequest,
+  context: { params: Promise<{ id: string }> }
+) {
+  const { id } = await context.params;
   if (!supabaseUrl || !supabaseAnonKey) {
     return NextResponse.json({ error: 'Supabase not configured' }, { status: 500 });
   }
 
-  const accessToken = extractAccessToken();
+  const accessToken = await extractAccessToken();
   if (!accessToken) {
     return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
   }
@@ -60,9 +58,9 @@ export async function GET(_: Request, { params }: { params: { id: string } }) {
   }
 
   const { data: prompt, error: promptError } = await supabase
-    .from<PromptRow>('prompts')
+    .from('prompts')
     .select('id, user_id, title, prompt_text')
-    .eq('id', params.id)
+    .eq('id', id)
     .single();
 
   if (promptError || !prompt) {

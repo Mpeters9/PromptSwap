@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { Suspense, useEffect, useMemo, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 
 import { supabase } from '@/lib/supabase-client';
@@ -18,7 +18,7 @@ type PurchaseRow = {
   prompt_id: string;
 };
 
-export default function CheckoutSuccessPage() {
+function CheckoutSuccessContent() {
   const searchParams = useSearchParams();
   const router = useRouter();
   const promptId = useMemo(() => searchParams.get('prompt_id'), [searchParams]);
@@ -54,7 +54,7 @@ export default function CheckoutSuccessPage() {
 
       console.log('Checking purchase for user', currentUserId, 'prompt', promptId);
       const { data: purchaseData, error: purchaseError } = await supabase
-        .from<PurchaseRow>('purchases')
+        .from('purchases')
         .select('buyer_id, prompt_id')
         .eq('buyer_id', currentUserId)
         .eq('prompt_id', promptId)
@@ -77,7 +77,7 @@ export default function CheckoutSuccessPage() {
 
       console.log('Purchase confirmed, fetching prompt', promptId);
       const { data: promptData, error: promptError } = await supabase
-        .from<PromptRow>('prompts')
+        .from('prompts')
         .select('id, title, prompt_text, tags, category')
         .eq('id', promptId)
         .single();
@@ -220,5 +220,13 @@ export default function CheckoutSuccessPage() {
         )}
       </div>
     </div>
+  );
+}
+
+export default function CheckoutSuccessPage() {
+  return (
+    <Suspense fallback={<div className="flex min-h-screen items-center justify-center bg-slate-50 px-4 py-12">Loading...</div>}>
+      <CheckoutSuccessContent />
+    </Suspense>
   );
 }

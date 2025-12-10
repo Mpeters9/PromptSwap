@@ -1,12 +1,9 @@
 import { NextResponse } from 'next/server';
 import Stripe from 'stripe';
-import { buffer } from 'micro';
-import { Readable } from 'node:stream';
 import { createClient } from '@supabase/supabase-js';
 import { logError } from '@/lib/logger';
 import { sendCreatorSaleEmail } from '@/lib/email';
 
-export const config = { api: { bodyParser: false } };
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 export const preferredRegion = 'iad1';
@@ -21,7 +18,7 @@ if (!stripeSecret) throw new Error('STRIPE_SECRET_KEY is required');
 if (!webhookSecret) throw new Error('STRIPE_WEBHOOK_SECRET is required');
 if (!supabaseUrl || !supabaseServiceKey) throw new Error('Supabase service credentials are required');
 
-const stripe = new Stripe(stripeSecret, { apiVersion: '2024-11-15' });
+const stripe = new Stripe(stripeSecret, { apiVersion: '2024-04-10' });
 const supabaseAdmin = createClient(supabaseUrl, supabaseServiceKey);
 
 type PromptRow = {
@@ -80,7 +77,7 @@ async function markEventProcessed(event: Stripe.Event) {
 
 async function fetchPrompt(promptId: string) {
   const { data, error } = await supabaseAdmin
-    .from<PromptRow>('prompts')
+    .from('prompts')
     .select('id, user_id, price, prompt_text, title')
     .eq('id', promptId)
     .maybeSingle();
@@ -181,7 +178,7 @@ async function creditSeller(sellerId: string | null, amount: number | null) {
   if (!Number.isFinite(delta) || (delta ?? 0) <= 0) return;
 
   const { data: profile, error: profileError } = await supabaseAdmin
-    .from<ProfileRow>('profiles')
+    .from('profiles')
     .select('credits')
     .eq('id', sellerId)
     .maybeSingle();
@@ -206,7 +203,7 @@ async function findSellerIdByAccount(accountId: string | null) {
   if (!accountId) return null;
 
   const { data, error } = await supabaseAdmin
-    .from<ProfileRow>('profiles')
+    .from('profiles')
     .select('id')
     .or(`stripe_account_id.eq.${accountId},connected_account_id.eq.${accountId}`)
     .maybeSingle();
@@ -344,7 +341,7 @@ async function handleTransferPaid(transfer: Stripe.Transfer) {
   const sellerId = sellerIdFromMetadata ?? (await findSellerIdByAccount(accountId));
 
   if (!sellerId) {
-    console.warn('transfer.paid received but seller could not be resolved', {
+  console.warn('transfer.created received but seller could not be resolved', {
       transferId: transfer.id,
       accountId,
     });
@@ -368,19 +365,9 @@ async function handleTransferPaid(transfer: Stripe.Transfer) {
   }
 }
 
-async function readRawBody(req: Request) {
-  if (!req.body) return Buffer.alloc(0);
-
-  const readable = Readable.fromWeb(req.body as any);
-  (readable as any).headers = Object.fromEntries(req.headers);
-
-  return buffer(readable as any);
-}
-
 export async function POST(req: Request) {
   const signature = req.headers.get('stripe-signature');
-
-  const rawBody = await readRawBody(req);
+  const rawBody = await req.text();
 
   if (!signature) {
     console.error('Missing Stripe signature header');
@@ -389,7 +376,7 @@ export async function POST(req: Request) {
 
   let event: Stripe.Event;
   try {
-    event = stripe.webhooks.constructEvent(rawBody, signature, webhookSecret);
+    event = stripe.webhooks.constructEvent(rawBody, signature, webhookSecret!);
   } catch (err: any) {
     console.error('Webhook signature verification failed', err?.message || err);
     return NextResponse.json({ error: err?.message || 'Invalid signature' }, { status: 400 });
@@ -410,7 +397,7 @@ export async function POST(req: Request) {
       case 'payment_intent.payment_failed':
         await handlePaymentIntentFailed(event.data.object as Stripe.PaymentIntent);
         break;
-      case 'transfer.paid':
+      case 'transfer.created':
         await handleTransferPaid(event.data.object as Stripe.Transfer);
         break;
       default:

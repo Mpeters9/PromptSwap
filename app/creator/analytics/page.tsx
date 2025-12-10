@@ -3,7 +3,7 @@ import { redirect } from "next/navigation";
 
 import { getCurrentUser } from "@/lib/supabase-server";
 import { prisma } from "@/lib/prisma";
-import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@/components/ui/card";
+import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { RevenueChart } from "@/components/creator/RevenueChart";
 import { Badge } from "@/components/ui/badge";
 import Link from "next/link";
@@ -170,9 +170,9 @@ export default async function CreatorAnalyticsPage() {
             <CardTitle className="text-xs font-medium text-muted-foreground">
               Total revenue
             </CardTitle>
-            <CardDescription className="text-2xl font-semibold text-foreground">
+            <p className="text-2xl font-semibold text-foreground">
               ${totalRevenue.toFixed(2)}
-            </CardDescription>
+            </p>
           </CardHeader>
         </Card>
 
@@ -181,9 +181,9 @@ export default async function CreatorAnalyticsPage() {
             <CardTitle className="text-xs font-medium text-muted-foreground">
               Total sales
             </CardTitle>
-            <CardDescription className="text-2xl font-semibold text-foreground">
+            <p className="text-2xl font-semibold text-foreground">
               {totalSales}
-            </CardDescription>
+            </p>
           </CardHeader>
         </Card>
 
@@ -192,9 +192,9 @@ export default async function CreatorAnalyticsPage() {
             <CardTitle className="text-xs font-medium text-muted-foreground">
               Total views
             </CardTitle>
-            <CardDescription className="text-2xl font-semibold text-foreground">
+            <p className="text-2xl font-semibold text-foreground">
               {totalViews}
-            </CardDescription>
+            </p>
           </CardHeader>
         </Card>
 
@@ -203,9 +203,9 @@ export default async function CreatorAnalyticsPage() {
             <CardTitle className="text-xs font-medium text-muted-foreground">
               Overall conversion
             </CardTitle>
-            <CardDescription className="text-2xl font-semibold text-foreground">
+            <p className="text-2xl font-semibold text-foreground">
               {overallConversion.toFixed(1)}%
-            </CardDescription>
+            </p>
           </CardHeader>
         </Card>
       </section>
@@ -217,9 +217,9 @@ export default async function CreatorAnalyticsPage() {
             <CardTitle className="text-sm font-semibold">
               Revenue over time
             </CardTitle>
-            <CardDescription className="text-xs">
+            <p className="text-xs text-muted-foreground">
               Aggregated by month. Use this to see momentum and growth.
-            </CardDescription>
+            </p>
           </CardHeader>
           <CardContent>
             <RevenueChart data={monthlyRevenue} />
@@ -231,9 +231,9 @@ export default async function CreatorAnalyticsPage() {
             <CardTitle className="text-sm font-semibold">
               Snapshot
             </CardTitle>
-            <CardDescription className="text-xs">
+            <p className="text-xs text-muted-foreground">
               High-level view of your earnings.
-            </CardDescription>
+            </p>
           </CardHeader>
           <CardContent className="space-y-3 text-sm">
             <div className="flex items-center justify-between">
@@ -268,9 +268,9 @@ export default async function CreatorAnalyticsPage() {
             <CardTitle className="text-sm font-semibold">
               Top prompts by revenue
             </CardTitle>
-            <CardDescription className="text-xs">
+            <p className="text-xs text-muted-foreground">
               Your highest-earning prompts, ranked by total revenue.
-            </CardDescription>
+            </p>
           </CardHeader>
           <CardContent>
             {revenueByPromptSorted.length === 0 ? (

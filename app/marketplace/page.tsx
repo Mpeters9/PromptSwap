@@ -1,4 +1,4 @@
-import { PrismaClient } from '@prisma/client';
+import { PrismaClient, type Prisma } from '@prisma/client';
 import Link from 'next/link';
 import { motion } from 'framer-motion';
 
@@ -7,6 +7,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
+import { buildMetadata } from '@/lib/metadata';
 import {
   Select,
   SelectContent,
@@ -33,17 +34,17 @@ export default async function MarketplacePage({ searchParams }: MarketplaceProps
   const category = searchParams?.category?.toString().trim() ?? '';
   const sort = searchParams?.sort?.toString().trim() ?? 'newest';
 
-  const orderBy =
+  const orderBy: Prisma.PromptOrderByWithRelationInput =
     sort === 'priceAsc'
       ? { price: 'asc' }
       : sort === 'priceDesc'
         ? { price: 'desc' }
         : sort === 'popular'
-          ? { orders: { _count: 'desc' } }
+          ? { sales: { _count: 'desc' } }
           : { createdAt: 'desc' };
 
-  let prompts = [];
-  let categories = [];
+  let prompts: any[] = [];
+  let categories: any[] = [];
 
   try {
     [prompts, categories] = await Promise.all([
@@ -58,7 +59,6 @@ export default async function MarketplacePage({ searchParams }: MarketplaceProps
                   ],
                 }
               : undefined,
-            category ? { category } : undefined,
           ].filter(Boolean) as object[],
         },
         orderBy,
@@ -67,20 +67,14 @@ export default async function MarketplacePage({ searchParams }: MarketplaceProps
           title: true,
           description: true,
           price: true,
-          category: true,
           tags: true,
           createdAt: true,
-          user_id: true,
+          userId: true,
           likes: true,
-          preview_image: true,
+          previewImage: true,
         },
       }),
-      prisma.prompt.findMany({
-        distinct: ['category'],
-        where: { category: { not: null } },
-        select: { category: true },
-        orderBy: { category: 'asc' },
-      }),
+      Promise.resolve([] as any[]),
     ]);
   } catch (err) {
     console.error('Marketplace load failed', err);
@@ -165,28 +159,6 @@ export default async function MarketplacePage({ searchParams }: MarketplaceProps
         </Card>
       </motion.div>
 
-      {categoryOptions.length > 0 && (
-        <div className="mb-5 flex flex-wrap gap-2">
-          {categoryOptions.map((cat) => {
-            const isActive = cat === category;
-            const searchParam = search ? `&search=${encodeURIComponent(search)}` : '';
-            const sortParam = sort ? `&sort=${encodeURIComponent(sort)}` : '';
-            return (
-              <Badge
-                key={cat}
-                variant={isActive ? 'default' : 'outline'}
-                className="cursor-pointer transition hover:scale-[1.02]"
-                asChild
-              >
-                <Link href={`/marketplace?category=${encodeURIComponent(cat)}${searchParam}${sortParam}`}>
-                  {cat}
-                </Link>
-              </Badge>
-            );
-          })}
-        </div>
-      )}
-
       {prompts.length === 0 ? (
         <div className="rounded-xl border border-slate-200 bg-white p-6 text-center shadow-sm dark:border-slate-800 dark:bg-slate-900">
           <p className="text-sm text-slate-600 dark:text-slate-300">
@@ -202,9 +174,8 @@ export default async function MarketplacePage({ searchParams }: MarketplaceProps
               title={prompt.title}
               description={prompt.description ?? ''}
               price={Number(prompt.price ?? 0)}
-              authorName={prompt.user_id ?? 'Creator'}
-              category={prompt.category ?? undefined}
-              previewImage={prompt.preview_image ?? undefined}
+              authorName={prompt.userId ?? 'Creator'}
+              previewImage={prompt.previewImage ?? undefined}
             />
           ))}
         </div>

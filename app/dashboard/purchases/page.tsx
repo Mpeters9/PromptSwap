@@ -11,11 +11,11 @@ const projectRef = supabaseUrl?.replace(/^https?:\/\//, '').split('.')[0];
 
 const prisma = new PrismaClient();
 
-function extractAccessToken(): string | null {
+async function extractAccessToken(): Promise<string | null> {
   if (!projectRef) return null;
-  const cookieStore = cookies();
+  const cookieStore = await cookies();
   const cookieName = `sb-${projectRef}-auth-token`;
-  const value = cookieStore.get(cookieName)?.value ?? cookieStore.get('supabase-auth-token')?.value;
+  const value = cookieStore.get(cookieName)?.value ?? cookieStore.get("supabase-auth-token")?.value;
   if (!value) return null;
 
   try {
@@ -31,7 +31,7 @@ function extractAccessToken(): string | null {
 
 async function getUserId(): Promise<string | null> {
   if (!supabaseUrl || !supabaseAnonKey) return null;
-  const accessToken = extractAccessToken();
+  const accessToken = await extractAccessToken();
   if (!accessToken) return null;
   const supabase = createClient(supabaseUrl, supabaseAnonKey, {
     global: { headers: { Authorization: `Bearer ${accessToken}` } },
@@ -61,7 +61,7 @@ export default async function PurchasesPage() {
     );
   }
 
-  const orders = await prisma.order.findMany({
+  const orders = await prisma.purchase.findMany({
     where: { buyerId: userId },
     include: { prompt: true },
     orderBy: { createdAt: 'desc' },
@@ -90,7 +90,10 @@ export default async function PurchasesPage() {
                   {order.prompt?.title ?? 'Prompt'}
                 </p>
                 <p className="text-xs text-slate-500">
-                  Purchased {new Date(order.createdAt).toLocaleDateString()}
+                  Purchased{' '}
+                  {order.createdAt
+                    ? new Date(order.createdAt).toLocaleDateString()
+                    : 'Unknown date'}
                 </p>
               </div>
               {order.prompt?.id && (

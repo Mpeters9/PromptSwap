@@ -1,3 +1,4 @@
+import type { NextRequest } from 'next/server';
 import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 
@@ -24,8 +25,12 @@ function escapeXml(str: string) {
     .replace(/'/g, '&#39;');
 }
 
-export async function GET(_: Request, { params }: { params: { id: string } }) {
-  const promptId = params.id;
+export async function GET(
+  _req: NextRequest,
+  context: { params: Promise<{ id: string }> }
+) {
+  const { id } = await context.params;
+  const promptId = id;
   if (!promptId) {
     return NextResponse.json({ error: 'missing_id' }, { status: 400 });
   }

@@ -8,7 +8,7 @@ import { RealtimeClient } from "@/app/chat/[sessionId]/RealtimeClient";
 type ChatUIProps = {
   sessionId: string;
   messages: ChatMessageDTO[];
-  sendUserMessage: (formData: FormData) => Promise<unknown>;
+  sendUserMessage: (formData: FormData) => void | Promise<void>;
 };
 
 export function ChatUI({ sessionId, messages, sendUserMessage }: ChatUIProps) {

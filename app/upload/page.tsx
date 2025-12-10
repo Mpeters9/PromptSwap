@@ -2,6 +2,7 @@
 
 import { FormEvent, useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
+import { motion } from 'framer-motion';
 
 import { PromptCard } from '@/components/PromptCard';
 import { Button } from '@/components/ui/button';
@@ -128,18 +129,20 @@ export default function UploadPage() {
     }
 
     setStatus('Saving prompt...');
-    const { data: result, error: insertError } = await supabase
+    const { data: result, error: insertError } = await (supabase as any)
       .from('prompts')
-      .insert({
-        user_id: user.id,
-        title: form.title.trim(),
-        description: form.description.trim() || null,
-        tags: tagList.length ? tagList : null,
-        price: priceValue,
-        prompt_text: form.promptText.trim(),
-        preview_image: previewUrl,
-        is_public: false,
-      })
+      .insert([
+        {
+          user_id: user.id,
+          title: form.title.trim(),
+          description: form.description.trim() || null,
+          tags: tagList.length ? tagList : null,
+          price: priceValue,
+          prompt_text: form.promptText.trim(),
+          preview_image: previewUrl,
+          is_public: false,
+        } as any,
+      ])
       .select()
       .single();
 
@@ -178,22 +181,18 @@ export default function UploadPage() {
   }
 
   return (
-    <div className="min-h-screen bg-slate-50 px-4 py-8 dark:bg-slate-950">
-      <div className="mx-auto grid max-w-6xl grid-cols-1 gap-6 lg:grid-cols-[1.5fr,1fr]">
-        <motion.div
-          initial={{ opacity: 0, y: 8 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.2, ease: 'easeOut' }}
-        >
+    <div className="min-h-screen bg-slate-50 dark:bg-slate-950">
+      <div className="mx-auto flex max-w-6xl flex-col gap-8 px-4 py-8 lg:flex-row lg:py-12">
+        <div className="flex-1">
           <Card className="shadow-sm border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900">
             <CardHeader>
-              <CardTitle>Upload Prompt</CardTitle>
-              <p className="text-sm text-slate-600">
-                Add your prompt details and upload an optional preview image.
+              <CardTitle>Publish a new prompt</CardTitle>
+              <p className="text-sm text-slate-500">
+                Share your best prompts with the community and start earning.
               </p>
             </CardHeader>
             <CardContent>
-              <form className="space-y-6" onSubmit={handleSubmit}>
+              <form onSubmit={handleSubmit} className="space-y-6">
                 <div className="space-y-2">
                   <label className="block text-sm font-medium text-slate-700" htmlFor="title">
                     Title *
@@ -296,7 +295,7 @@ export default function UploadPage() {
                 </div>
 
                 {error && (
-                  <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+                  <div className="rounded-lg border border-red-100 bg-red-50 px-4 py-3 text-sm text-red-700">
                     {error}
                   </div>
                 )}
@@ -323,145 +322,9 @@ export default function UploadPage() {
               </form>
             </CardContent>
           </Card>
-        </motion.div>
-          <CardHeader>
-            <CardTitle>Upload Prompt</CardTitle>
-            <p className="text-sm text-slate-600">
-              Add your prompt details and upload an optional preview image.
-            </p>
-          </CardHeader>
-          <CardContent>
-            <form className="space-y-6" onSubmit={handleSubmit}>
-              <div className="space-y-2">
-                <label className="block text-sm font-medium text-slate-700" htmlFor="title">
-                  Title *
-                </label>
-                <Input
-                  id="title"
-                  name="title"
-                  required
-                  className={fieldErrors.title ? 'border-red-300 focus-visible:ring-red-200' : ''}
-                  value={form.title}
-                  onChange={handleChange('title')}
-                  placeholder="E.g., Product launch email prompt"
-                />
-              </div>
+        </div>
 
-              <div className="space-y-2">
-                <label className="block text-sm font-medium text-slate-700" htmlFor="description">
-                  Description
-                </label>
-                <Textarea
-                  id="description"
-                  name="description"
-                  rows={3}
-                  value={form.description}
-                  onChange={handleChange('description')}
-                  placeholder="Describe what this prompt does and when to use it."
-                />
-              </div>
-
-              <div className="grid gap-6 md:grid-cols-2">
-                <div className="space-y-2">
-                  <label className="block text-sm font-medium text-slate-700" htmlFor="tags">
-                    Tags (comma separated)
-                  </label>
-                  <Input
-                    id="tags"
-                    name="tags"
-                    value={form.tags}
-                    onChange={handleChange('tags')}
-                    placeholder="E.g., email, marketing, launch"
-                  />
-                  {tagList.length > 0 ? (
-                    <div className="text-xs text-slate-500">Parsed tags: {tagList.join(', ')}</div>
-                  ) : (
-                    <div className="text-xs text-slate-400">No tags added yet.</div>
-                  )}
-                </div>
-                <div className="space-y-2">
-                  <label className="block text-sm font-medium text-slate-700" htmlFor="price">
-                    Price (optional)
-                  </label>
-                  <Input
-                    id="price"
-                    name="price"
-                    type="number"
-                    step="0.01"
-                    min="0"
-                    value={form.price}
-                    onChange={handleChange('price')}
-                    placeholder="E.g., 5.00"
-                  />
-                </div>
-              </div>
-
-              <div className="space-y-2">
-                <label className="block text-sm font-medium text-slate-700" htmlFor="promptText">
-                  Prompt Text *
-                </label>
-                <Textarea
-                  id="promptText"
-                  name="promptText"
-                  rows={6}
-                  required
-                  className={
-                    fieldErrors.promptText ? 'border-red-300 focus-visible:ring-red-200' : ''
-                  }
-                  value={form.promptText}
-                  onChange={handleChange('promptText')}
-                  placeholder="Full prompt content..."
-                />
-              </div>
-
-              <div className="space-y-2">
-                <label className="block text-sm font-medium text-slate-700" htmlFor="preview">
-                  Preview Image (optional)
-                </label>
-                <Input
-                  id="preview"
-                  name="preview"
-                  type="file"
-                  accept="image/*"
-                  onChange={handleFileChange}
-                  className="cursor-pointer"
-                />
-                {form.previewFile && (
-                  <div className="text-xs text-slate-500">
-                    Selected: {form.previewFile.name} ({Math.round(form.previewFile.size / 1024)} KB)
-                  </div>
-                )}
-              </div>
-
-              {error && (
-                <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
-                  {error}
-                </div>
-              )}
-
-              {status && !error && (
-                <div className="rounded-lg border border-indigo-100 bg-indigo-50 px-4 py-3 text-sm text-indigo-700">
-                  {status}
-                </div>
-              )}
-
-              <div className="flex items-center justify-end gap-4">
-                <Button
-                  type="button"
-                  variant="outline"
-                  onClick={() => router.back()}
-                  disabled={submitting}
-                >
-                  Cancel
-                </Button>
-                <Button type="submit" disabled={submitting}>
-                  {submitting ? 'Uploading...' : 'Publish Prompt'}
-                </Button>
-              </div>
-            </form>
-          </CardContent>
-        </Card>
-
+        {/* Live preview column */}
         <div className="lg:sticky lg:top-6">
           <motion.div
             initial={{ opacity: 0, y: 8 }}
@@ -480,7 +343,9 @@ export default function UploadPage() {
                   description={form.description || 'Add a description to see it here.'}
                   price={Number(form.price || 0)}
                   authorName="You"
-                  previewImage={form.previewFile ? URL.createObjectURL(form.previewFile) : undefined}
+                  previewImage={
+                    form.previewFile ? URL.createObjectURL(form.previewFile) : undefined
+                  }
                 />
               </CardContent>
             </Card>

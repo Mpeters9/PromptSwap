@@ -29,11 +29,11 @@ type ProfileRow = {
   username: string | null;
 };
 
-function extractAccessToken(): string | null {
+async function extractAccessToken(): Promise<string | null> {
   if (!projectRef) return null;
-  const cookieStore = cookies();
+  const cookieStore = await cookies();
   const cookieName = `sb-${projectRef}-auth-token`;
-  const value = cookieStore.get(cookieName)?.value ?? cookieStore.get('supabase-auth-token')?.value;
+  const value = cookieStore.get(cookieName)?.value ?? cookieStore.get("supabase-auth-token")?.value;
   if (!value) return null;
 
   try {
@@ -57,7 +57,7 @@ export default async function PromptPage({ params }: { params: { id: string } })
     throw new Error('Supabase environment variables are missing.');
   }
 
-  const accessToken = extractAccessToken();
+  const accessToken = await extractAccessToken();
 
   const supabase = createClient(supabaseUrl, supabaseAnonKey, {
     global: accessToken
@@ -70,7 +70,7 @@ export default async function PromptPage({ params }: { params: { id: string } })
   });
 
   const { data: prompt, error: promptError } = await supabase
-    .from<PromptRow>('prompts')
+    .from('prompts')
     .select('id, title, description, prompt_text, user_id, price')
     .eq('id', params.id)
     .single();
@@ -81,7 +81,7 @@ export default async function PromptPage({ params }: { params: { id: string } })
 
   const [{ data: userData }, { data: sellerProfile }] = await Promise.all([
     supabase.auth.getUser(accessToken ?? undefined),
-    supabase.from<ProfileRow>('profiles').select('username').eq('id', prompt.user_id).maybeSingle(),
+    supabase.from('profiles').select('username').eq('id', prompt.user_id).maybeSingle(),
   ]);
 
   const userId = userData?.user?.id ?? null;

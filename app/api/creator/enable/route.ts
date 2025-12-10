@@ -16,11 +16,11 @@ const prisma = new PrismaClient();
 const stripe =
   stripeSecretKey && new Stripe(stripeSecretKey, { apiVersion: '2024-11-15' as any });
 
-function extractAccessToken(): string | null {
+async function extractAccessToken(): Promise<string | null> {
   if (!projectRef) return null;
-  const cookieStore = cookies();
+  const cookieStore = await cookies();
   const cookieName = `sb-${projectRef}-auth-token`;
-  const value = cookieStore.get(cookieName)?.value ?? cookieStore.get('supabase-auth-token')?.value;
+  const value = cookieStore.get(cookieName)?.value ?? cookieStore.get("supabase-auth-token")?.value;
   if (!value) return null;
 
   try {
@@ -36,7 +36,7 @@ function extractAccessToken(): string | null {
 
 async function getUser() {
   if (!supabaseUrl || !supabaseAnonKey) return null;
-  const accessToken = extractAccessToken();
+  const accessToken = await extractAccessToken();
   if (!accessToken) return null;
 
   const supabase = createClient(supabaseUrl, supabaseAnonKey, {
@@ -61,21 +61,21 @@ export async function POST() {
     return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
   }
 
-  const dbUser = await prisma.user.findUnique({
+  const dbProfile = await prisma.profile.findUnique({
     where: { id: user.id },
-    select: { stripeAccountId: true, email: true },
+    select: { stripeAccountId: true },
   });
 
-  let accountId = dbUser?.stripeAccountId ?? null;
+  let accountId = dbProfile?.stripeAccountId ?? null;
 
   if (!accountId) {
     const account = await stripe.accounts.create({
       type: 'express',
-      email: user.email ?? dbUser?.email ?? undefined,
+      email: user.email ?? undefined,
     });
     accountId = account.id;
 
-    await prisma.user.update({
+    await prisma.profile.update({
       where: { id: user.id },
       data: { stripeAccountId: accountId },
     });

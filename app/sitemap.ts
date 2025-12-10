@@ -18,13 +18,12 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
   }));
 
   const prompts = await prisma.prompt.findMany({
-    where: { isPublic: true },
-    select: { id: true, updatedAt: true },
+    select: { id: true },
   });
 
   const promptRoutes: MetadataRoute.Sitemap = prompts.map((p) => ({
     url: `${siteUrl}/prompts/${p.id}`,
-    lastModified: p.updatedAt ?? new Date(),
+    lastModified: new Date(),
   }));
 
   return [...staticRoutes, ...promptRoutes];

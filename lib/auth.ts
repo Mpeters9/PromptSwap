@@ -5,11 +5,11 @@ const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL?.trim();
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY?.trim();
 const projectRef = supabaseUrl?.replace(/^https?:\/\//, '').split('.')[0];
 
-function extractAccessToken(): string | null {
+async function extractAccessToken(): Promise<string | null> {
   if (!projectRef) return null;
-  const cookieStore = cookies();
+  const cookieStore = await cookies();
   const cookieName = `sb-${projectRef}-auth-token`;
-  const value = cookieStore.get(cookieName)?.value ?? cookieStore.get('supabase-auth-token')?.value;
+  const value = cookieStore.get(cookieName)?.value ?? cookieStore.get("supabase-auth-token")?.value;
   if (!value) return null;
 
   try {
@@ -25,7 +25,7 @@ function extractAccessToken(): string | null {
 
 export async function getUser(): Promise<User | null> {
   if (!supabaseUrl || !supabaseAnonKey) return null;
-  const accessToken = extractAccessToken();
+  const accessToken = await extractAccessToken();
   if (!accessToken) return null;
 
   const supabase = createClient(supabaseUrl, supabaseAnonKey, {

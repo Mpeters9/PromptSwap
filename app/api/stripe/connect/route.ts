@@ -19,7 +19,7 @@ if (!supabaseUrl || !supabaseServiceKey) {
   throw new Error('Supabase service credentials are required.');
 }
 
-const stripe = new Stripe(stripeSecretKey, { apiVersion: '2023-08-16' });
+const stripe = new Stripe(stripeSecretKey, { apiVersion: '2024-04-10' });
 const supabaseAdmin = createClient(supabaseUrl, supabaseServiceKey);
 
 type ConnectBody = { user_id?: string };

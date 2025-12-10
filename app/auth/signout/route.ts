@@ -2,7 +2,7 @@ import { supabaseServer } from "@/lib/supabase-server";
 import { redirect } from "next/navigation";
 
 export async function POST() {
-  const supabase = supabaseServer();
+  const supabase = await supabaseServer();
 
   await supabase.auth.signOut();
 

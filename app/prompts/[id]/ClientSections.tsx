@@ -57,19 +57,21 @@ export function ActionPanel({ prompt, salesCount, averageRating, ratingCount }: 
     }
     setForking(true);
     try {
-      const { data, error } = await supabase
+      const { data, error } = await (supabase as any)
         .from('prompts')
-        .insert({
-          user_id: user.id,
-          title: `${prompt.title} (Fork)`,
-          description: prompt.description,
-          tags: prompt.tags,
-          price: prompt.price,
-          prompt_text: prompt.prompt_text,
-          preview_image: prompt.preview_image,
-          is_public: false,
-          version: (prompt as any).version ?? 1,
-        })
+        .insert([
+          {
+            user_id: user.id,
+            title: `${prompt.title} (Fork)`,
+            description: prompt.description,
+            tags: prompt.tags,
+            price: prompt.price,
+            prompt_text: prompt.prompt_text,
+            preview_image: prompt.preview_image,
+            is_public: false,
+            version: (prompt as any).version ?? 1,
+          } as any,
+        ])
         .select('id')
         .single();
       if (error) throw error;
@@ -161,12 +163,14 @@ function RatingForm({ promptId, existingRatings, onNewRating }: RatingFormProps)
     setSubmitting(true);
     setError(null);
     try {
-      const { error: insertError } = await supabase.from('prompt_ratings').insert({
-        prompt_id: promptId,
-        user_id: user.id,
-        rating,
-        comment: comment.trim() || null,
-      });
+      const { error: insertError } = await (supabase as any).from('prompt_ratings').insert([
+        {
+          prompt_id: promptId,
+          user_id: user.id,
+          rating,
+          comment: comment.trim() || null,
+        } as any,
+      ]);
       if (insertError) throw insertError;
       onNewRating([{ user_id: user.id, rating, comment: comment.trim() || null, created_at: new Date().toISOString() }, ...existingRatings]);
       setComment('');

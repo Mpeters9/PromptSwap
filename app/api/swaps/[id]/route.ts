@@ -27,11 +27,14 @@ async function getUserId(req: NextRequest) {
   return data.user.id;
 }
 
-export async function PATCH(req: NextRequest, { params }: { params: { id: string } }) {
+export async function PATCH(
+  req: NextRequest,
+  context: { params: Promise<{ id: string }> }
+) {
   const userId = await getUserId(req);
   if (!userId) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
-  const id = params.id;
+  const { id } = await context.params;
 
   let body: { status?: 'accepted' | 'rejected' };
   try {

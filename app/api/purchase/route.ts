@@ -1,14 +1,13 @@
 import { NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
-import { createRouteHandlerClient } from '@supabase/auth-helpers-nextjs';
 import { createClient } from '@supabase/supabase-js';
 import { logError } from '@/lib/logger';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL?.trim();
-const supabaseServiceKey = process.env.NEXT_PRIVATE_SUPABASE_SERVICE_ROLE_KEY?.trim();
+const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL?.trim() ?? '';
+const supabaseServiceKey = process.env.NEXT_PRIVATE_SUPABASE_SERVICE_ROLE_KEY?.trim() ?? '';
 
 if (!supabaseUrl || !supabaseServiceKey) {
   throw new Error('Supabase URL and service role key are required for purchases.');
@@ -16,14 +15,6 @@ if (!supabaseUrl || !supabaseServiceKey) {
 
 type PurchaseBody = {
   promptId?: string;
-};
-
-type PromptRow = {
-  id: string;
-  title: string;
-  price: number | null;
-  user_id: string;
-  prompt_text: string;
 };
 
 type ProfileRow = {
@@ -47,7 +38,13 @@ function rateLimit(key: string) {
 }
 
 export async function POST(req: Request) {
-  const supabase = createRouteHandlerClient({ cookies });
+  const cookieStore = await cookies();
+  const accessToken = cookieStore.get("sb-access-token")?.value ?? "";
+  const supabase = createClient(supabaseUrl, supabaseServiceKey, {
+    global: {
+      headers: accessToken ? { Authorization: `Bearer ${accessToken}` } : {},
+    },
+  });
   const supabaseAdmin = createClient(supabaseUrl, supabaseServiceKey);
 
   try {
@@ -76,7 +73,7 @@ export async function POST(req: Request) {
     const userId = sessionData.session.user.id;
 
     const { data: prompt, error: promptError } = await supabase
-      .from<PromptRow>('prompts')
+      .from('prompts')
       .select('id, title, price, user_id, prompt_text')
       .eq('id', promptId)
       .single();
@@ -107,7 +104,7 @@ export async function POST(req: Request) {
     const price = Math.round(Number(prompt.price ?? 0));
 
     const { data: buyerProfile, error: buyerProfileError } = await supabaseAdmin
-      .from<ProfileRow>('profiles')
+      .from('profiles')
       .select('credits')
       .eq('id', userId)
       .single();
@@ -127,7 +124,7 @@ export async function POST(req: Request) {
     }
 
     const { data: sellerProfile, error: sellerProfileError } = await supabaseAdmin
-      .from<ProfileRow>('profiles')
+      .from('profiles')
       .select('credits')
       .eq('id', prompt.user_id)
       .single();
@@ -140,7 +137,7 @@ export async function POST(req: Request) {
 
     // Attempt to keep updates consistent with manual rollbacks if a later step fails.
     const { data: buyerUpdate, error: buyerUpdateError } = await supabaseAdmin
-      .from<ProfileRow>('profiles')
+      .from('profiles')
       .update({ credits: buyerCredits - price })
       .eq('id', userId)
       .eq('credits', buyerCredits)
@@ -153,7 +150,7 @@ export async function POST(req: Request) {
     }
 
     const { data: sellerUpdate, error: sellerUpdateError } = await supabaseAdmin
-      .from<ProfileRow>('profiles')
+      .from('profiles')
       .update({ credits: sellerCredits + price })
       .eq('id', prompt.user_id)
       .eq('credits', sellerCredits)

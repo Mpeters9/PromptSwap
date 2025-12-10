@@ -56,11 +56,11 @@ export default function EditPromptPage() {
       }
       const userId = sessionData.session.user.id;
 
-      const { data, error: fetchErr } = await supabase
-        .from<PromptRow>('prompts')
-        .select('id, title, description, prompt_text, price, category, tags, user_id')
-        .eq('id', params.id)
-        .single();
+        const { data, error: fetchErr } = await supabase
+          .from('prompts')
+          .select('id, title, description, prompt_text, price, category, tags, user_id')
+          .eq('id', params.id)
+          .single();
 
       if (fetchErr) {
         setError(fetchErr.message);

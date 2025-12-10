@@ -1,3 +1,4 @@
+import type { NextRequest } from 'next/server';
 import { NextResponse } from 'next/server';
 import { PrismaClient } from '@prisma/client';
 
@@ -5,13 +6,17 @@ import { getUser } from '@/lib/auth';
 
 const prisma = new PrismaClient();
 
-export async function POST(_req: Request, { params }: { params: { id: string } }) {
+export async function POST(
+  _req: NextRequest,
+  context: { params: Promise<{ id: string }> }
+) {
   const user = await getUser();
   if (!user) {
     return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
   }
 
-  const promptId = params.id;
+  const { id } = await context.params;
+  const promptId = id;
   if (!promptId) {
     return NextResponse.json({ error: 'invalid_prompt' }, { status: 400 });
   }

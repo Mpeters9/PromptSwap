@@ -1,7 +1,12 @@
 import { NextResponse } from "next/server";
-import { stripe } from "@/lib/stripe";
-import { createRouteHandlerClient } from "@supabase/auth-helpers-nextjs";
-import { cookies } from "next/headers";
+import Stripe from "stripe";
+import { createClient } from "@supabase/supabase-js";
+
+const stripe = new Stripe(process.env.STRIPE_SECRET_KEY ?? "", { apiVersion: "2024-04-10" });
+const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL ?? "";
+const supabaseServiceKey =
+  process.env.NEXT_PRIVATE_SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY || "";
+const supabaseAdmin = createClient(supabaseUrl, supabaseServiceKey);
 
 export async function POST(req: Request) {
   const { promptId } = await req.json();
@@ -9,11 +14,9 @@ export async function POST(req: Request) {
   if (!promptId)
     return NextResponse.json({ error: "Missing promptId" }, { status: 400 });
 
-  const supabase = createRouteHandlerClient({ cookies });
-
-  const { data: prompt } = await supabase
+  const { data: prompt } = await supabaseAdmin
     .from("prompts")
-    .select("id, price, creator_id")
+    .select("id, price, user_id")
     .eq("id", promptId)
     .single();
 
@@ -21,7 +24,7 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "Prompt not found" }, { status: 404 });
 
   // Get seller account metadata
-  const { data: { user: seller } } = await supabase.auth.admin.getUserById(prompt.creator_id);
+  const { data: { user: seller } } = await supabaseAdmin.auth.admin.getUserById(prompt.user_id);
 
   const sellerStripeId = seller?.user_metadata?.stripe_account_id;
 
@@ -38,7 +41,7 @@ export async function POST(req: Request) {
     },
     metadata: {
       promptId,
-      sellerId: prompt.creator_id,
+      sellerId: prompt.user_id,
     },
   });
 

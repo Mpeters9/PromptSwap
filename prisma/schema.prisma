@@ -91,6 +91,7 @@ model Prompt {
   previewImage String?     @map("preview_image") @db.Text
   isPublic     Boolean?    @map("is_public") @default(false) @db.Boolean
   isFeatured   Boolean?    @map("is_featured") @default(false) @db.Boolean
+  likes        Int?        @default(0) @db.Integer
   version      Int?        @default(1) @db.Integer
   createdAt    DateTime?   @map("created_at") @default(now()) @db.Timestamp(6)
 

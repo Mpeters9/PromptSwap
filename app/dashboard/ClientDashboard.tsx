@@ -55,6 +55,9 @@ export default function ClientDashboard() {
   }, [user]);
 
   const loadData = async () => {
+    const userId = user?.id;
+    if (!userId) return;
+
     setStatus('Loading dashboard data...');
     setError(null);
     try {
@@ -62,22 +65,22 @@ export default function ClientDashboard() {
         supabase
           .from('prompts')
           .select('id, title, price, created_at, preview_image')
-          .eq('user_id', user?.id)
+          .eq('user_id', userId)
           .order('created_at', { ascending: false }),
         supabase
           .from('prompt_sales')
           .select('id, prompt_id, amount, created_at, stripe_txn_id, prompts(title)')
-          .eq('seller_id', user?.id)
+          .eq('seller_id', userId)
           .order('created_at', { ascending: false })
           .limit(10),
         supabase
           // Adjust this table name/fields to your saved prompts table.
           .from('saved_prompts')
           .select('prompt_id, prompts(id, title, price, created_at, preview_image)')
-          .eq('user_id', user?.id)
+          .eq('user_id', userId)
           .order('created_at', { ascending: false })
           .limit(10),
-        supabase.from('profiles').select('stripe_account_id').eq('id', user?.id).single(),
+        supabase.from('profiles').select('stripe_account_id').eq('id', userId).single(),
       ]);
 
       if (promptRes.error) throw promptRes.error;

@@ -59,11 +59,24 @@ export default function AdminClient() {
   }, [loading, user]);
 
   const authorizedFetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+    // Safeguard: if supabase is not initialized, surface a clear error.
+    if (!supabase) {
+      throw new Error(
+        'Supabase client is not initialized. Check your NEXT_PUBLIC_SUPABASE_* env vars.',
+      );
+    }
+
+    const client = supabase;
+
     const {
       data: { session },
       error: sessionError,
-    } = await supabase.auth.getSession();
-    if (sessionError || !session?.access_token) throw new Error('Not authenticated');
+    } = await client.auth.getSession();
+
+    if (sessionError || !session?.access_token) {
+      throw new Error('Not authenticated');
+    }
+
     return fetch(input, {
       ...init,
       headers: {

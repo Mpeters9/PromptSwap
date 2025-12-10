@@ -65,7 +65,7 @@ export default function DashboardPayoutsPage() {
       }
 
       const { data: profileData, error: profileErr } = await supabase
-        .from<ProfileRow>('profiles')
+        .from('profiles')
         .select('stripe_account_id, connected_account_id')
         .eq('id', userId)
         .single();
@@ -80,15 +80,16 @@ export default function DashboardPayoutsPage() {
       setAccountId(profileData?.connected_account_id ?? profileData?.stripe_account_id ?? null);
 
       const [{ data: salesData, error: salesErr }, { data: payoutData, error: payoutsErr }] = await Promise.all([
-        .from<SaleRow>('purchases')
-        .select('id, price, buyer_id, created_at, prompts(title, price)')
-        .eq('seller_id', userId)
-        .order('created_at', { ascending: false }),
-      supabase
-        .from<PayoutRow>('payouts')
-        .select('id, amount, currency, stripe_transfer_id, created_at')
-        .eq('seller_id', userId)
-        .order('created_at', { ascending: false }),
+        supabase
+          .from('purchases')
+          .select('id, price, buyer_id, created_at, prompts(title, price)')
+          .eq('seller_id', userId)
+          .order('created_at', { ascending: false }),
+        supabase
+          .from('payouts')
+          .select('id, amount, currency, stripe_transfer_id, created_at')
+          .eq('seller_id', userId)
+          .order('created_at', { ascending: false }),
       ]);
 
       if (salesErr || payoutsErr) {
@@ -98,7 +99,12 @@ export default function DashboardPayoutsPage() {
         return;
       }
 
-      setSales(salesData ?? []);
+      const normalizedSales: SaleRow[] = (salesData ?? []).map((sale: any) => ({
+        ...sale,
+        prompts: Array.isArray(sale.prompts) ? sale.prompts[0] ?? null : sale.prompts ?? null,
+      }));
+
+      setSales(normalizedSales);
       setPayouts(payoutData ?? []);
       setLoading(false);
     };

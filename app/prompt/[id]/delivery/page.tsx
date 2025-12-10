@@ -53,7 +53,7 @@ export default function PromptDeliveryPage() {
       }
 
       const { data: promptData, error: promptError } = await supabase
-        .from<PromptRow>('prompts')
+        .from('prompts')
         .select('title, prompt_text, category')
         .eq('id', params.id)
         .single();

@@ -1,30 +1,20 @@
 "use client";
 import { useState } from "react";
-import { loadStripe } from "@stripe/stripe-js";
 
-const stripePromise = loadStripe(process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY!);
-
-export default function PromptPage({ params }) {
+export default function PromptPage({ params }: { params: { id: string } }) {
   const [loading, setLoading] = useState(false);
 
   async function startPurchase() {
     setLoading(true);
-
-    const res = await fetch("/api/stripe/create-payment-intent", {
-      method: "POST",
-      body: JSON.stringify({ promptId: params.id }),
-    });
-
-    const { clientSecret } = await res.json();
-    const stripe = await stripePromise;
-
-    const result = await stripe!.redirectToCheckout({
-      lineItems: [],
-      mode: "payment",
-      clientSecret,
-    });
-
-    if (result.error) alert(result.error.message);
+    try {
+      await fetch("/api/stripe/create-payment-intent", {
+        method: "POST",
+        body: JSON.stringify({ promptId: params.id }),
+      });
+      alert("Purchase flow not available (Stripe client not configured).");
+    } finally {
+      setLoading(false);
+    }
   }
 
   return (

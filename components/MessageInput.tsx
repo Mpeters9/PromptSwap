@@ -1,6 +1,6 @@
 type MessageInputProps = {
   sessionId: string;
-  sendUserMessage: (formData: FormData) => Promise<unknown>;
+  sendUserMessage: (formData: FormData) => void | Promise<void>;
 };
 
 export function MessageInput({

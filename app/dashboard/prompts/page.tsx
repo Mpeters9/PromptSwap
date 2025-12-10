@@ -44,10 +44,10 @@ export default function DashboardPromptsPage() {
 
       const currentUserId = sessionData.session.user.id;
 
-      const { data, error: promptErr } = await supabase
-        .from<PromptRow>('prompts')
-        .select('id, title, description, price, created_at, user_id')
-        .eq('user_id', currentUserId);
+        const { data, error: promptErr } = await supabase
+          .from('prompts')
+          .select('id, title, description, price, created_at, user_id')
+          .eq('user_id', currentUserId);
 
       if (promptErr) {
         setError(promptErr.message);
@@ -142,8 +142,6 @@ export default function DashboardPromptsPage() {
                 description={prompt.description ?? ''}
                 price={Number(prompt.price ?? 0)}
                 authorName="You"
-                likes={0}
-                createdAt={prompt.created_at ? new Date(prompt.created_at) : undefined}
               />
               <div className="flex flex-wrap gap-2">
                 <Link

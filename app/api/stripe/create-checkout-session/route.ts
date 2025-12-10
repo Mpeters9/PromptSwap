@@ -6,7 +6,7 @@ export const runtime = "nodejs";
 
 // Stripe in test mode (use your test secret key in .env.local)
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
-  apiVersion: "2023-10-16",
+  apiVersion: '2024-04-10',
 });
 
 // Supabase service client (we may use this later to log purchases, etc.)

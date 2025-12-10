@@ -19,11 +19,11 @@ type Body = {
   preview_image?: string | null;
 };
 
-function extractAccessToken(): string | null {
+async function extractAccessToken(): Promise<string | null> {
   if (!projectRef) return null;
-  const store = cookies();
+  const store = await cookies();
   const cookieName = `sb-${projectRef}-auth-token`;
-  const value = store.get(cookieName)?.value ?? store.get('supabase-auth-token')?.value;
+  const value = store.get(cookieName)?.value ?? store.get("supabase-auth-token")?.value;
   if (!value) return null;
 
   try {
@@ -42,7 +42,7 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: 'Supabase not configured' }, { status: 500 });
   }
 
-  const accessToken = extractAccessToken();
+  const accessToken = await extractAccessToken();
   if (!accessToken) {
     return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
   }

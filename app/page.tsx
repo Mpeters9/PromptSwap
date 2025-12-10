@@ -63,6 +63,7 @@ export default async function HomePage() {
     { avg: number | null; count: number }
   >();
   for (const row of ratingGroups) {
+    if (!row.promptId) continue;
     ratingStatsByPromptId.set(row.promptId, {
       avg: row._avg.rating ?? null,
       count: row._count.rating,

@@ -13,13 +13,26 @@ export default function AccountPage() {
   useEffect(() => {
     const loadUser = async () => {
       setLoading(true);
+
+      // Safeguard: if supabase is not initialized, surface a clear error and bail.
+      if (!supabase) {
+        setError("Supabase client is not initialized. Check NEXT_PUBLIC_SUPABASE_* env vars.");
+        setEmail(null);
+        setLoading(false);
+        return;
+      }
+
       const { data, error: sessionError } = await supabase.auth.getUser();
+
       if (sessionError) {
         setError(sessionError.message);
         setEmail(null);
-      } else {
-        setEmail(data.user?.email ?? null);
+        setLoading(false);
+        return;
       }
+
+      setEmail(data.user?.email ?? null);
+      setError(null);
       setLoading(false);
     };
 

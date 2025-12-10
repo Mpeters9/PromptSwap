@@ -30,6 +30,9 @@ export default async function ChatPage({
   }
 
   const { session, messages } = data;
+  const handleSendMessage = async (formData: FormData) => {
+    await sendUserMessage(formData);
+  };
 
   return (
     <main className="max-w-3xl mx-auto px-4 py-6 space-y-4">
@@ -48,7 +51,7 @@ export default async function ChatPage({
         <ChatUI
           sessionId={session.id}
           messages={messages as ChatMessageDTO[]}
-          sendUserMessage={sendUserMessage}
+          sendUserMessage={handleSendMessage}
         />
       </section>
     </main>

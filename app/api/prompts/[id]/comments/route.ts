@@ -30,12 +30,16 @@ async function getUserId(req: NextRequest) {
 const sanitize = (value: string) =>
   value.replace(/</g, '&lt;').replace(/>/g, '&gt;').slice(0, 2000); // trim to practical length
 
-export async function GET(_req: NextRequest, { params }: { params: { id: string } }) {
+export async function GET(
+  _req: NextRequest,
+  context: { params: Promise<{ id: string }> }
+) {
+  const { id } = await context.params;
   try {
     const { data, error } = await supabaseAdmin
       .from('prompt_comments')
       .select('id, user_id, comment, created_at')
-      .eq('prompt_id', params.id)
+      .eq('prompt_id', id)
       .order('created_at', { ascending: false });
 
     if (error) throw error;
@@ -45,7 +49,11 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
   }
 }
 
-export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
+export async function POST(
+  req: NextRequest,
+  context: { params: Promise<{ id: string }> }
+) {
+  const { id } = await context.params;
   const userId = await getUserId(req);
   if (!userId) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
@@ -65,7 +73,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     const { data, error } = await supabaseAdmin
       .from('prompt_comments')
       .insert({
-        prompt_id: params.id,
+        prompt_id: id,
         user_id: userId,
         comment,
       })

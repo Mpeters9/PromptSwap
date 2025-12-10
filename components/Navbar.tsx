@@ -3,13 +3,10 @@
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { Moon, Sun, Menu } from 'lucide-react';
-import { useTheme } from 'next-themes';
 
 import { Avatar } from '@/components/ui/avatar';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { Sheet, SheetContent, SheetTrigger } from '@/components/ui/sheet';
 
 type NavItem = {
   label: string;
@@ -26,8 +23,6 @@ const navItems: NavItem[] = [
 
 export default function Navbar() {
   const pathname = usePathname();
-  const { theme, setTheme } = useTheme();
-  const [open, setOpen] = useState(false);
   const [isAuthed, setIsAuthed] = useState(false);
 
   useEffect(() => {
@@ -37,8 +32,6 @@ export default function Navbar() {
 
   const isActive = (href: string) =>
     pathname === href || (href !== '/' && pathname?.startsWith(href));
-
-  const toggleTheme = () => setTheme(theme === 'dark' ? 'light' : 'dark');
 
   const links = navItems.filter((item) => (item.authOnly ? isAuthed : true));
 
@@ -74,55 +67,9 @@ export default function Navbar() {
               <Link href="/auth/login">Sign in</Link>
             </Button>
           )}
-          <Button variant="ghost" size="icon" onClick={toggleTheme} aria-label="Toggle theme">
-            {theme === 'dark' ? <Sun className="h-5 w-5" /> : <Moon className="h-5 w-5" />}
-          </Button>
           <Avatar className="h-9 w-9 bg-slate-100 dark:bg-slate-800" />
         </nav>
 
-        {/* Mobile */}
-        <div className="flex items-center gap-2 md:hidden">
-          <Button variant="ghost" size="icon" onClick={toggleTheme} aria-label="Toggle theme">
-            {theme === 'dark' ? <Sun className="h-5 w-5" /> : <Moon className="h-5 w-5" />}
-          </Button>
-          <Sheet open={open} onOpenChange={setOpen}>
-            <SheetTrigger asChild>
-              <Button variant="ghost" size="icon" aria-label="Open menu">
-                <Menu className="h-5 w-5" />
-              </Button>
-            </SheetTrigger>
-            <SheetContent side="right" className="w-72 p-4">
-              <div className="mb-4 flex items-center justify-between">
-                <div className="text-lg font-semibold text-slate-900 dark:text-slate-50">
-                  Menu
-                </div>
-                <Avatar className="h-8 w-8 bg-slate-100 dark:bg-slate-800" />
-              </div>
-              <div className="flex flex-col gap-2">
-                {links.map((item) => (
-                  <Button
-                    key={item.href}
-                    variant={isActive(item.href) ? 'secondary' : 'ghost'}
-                    asChild
-                    className="justify-start text-sm font-semibold"
-                    onClick={() => setOpen(false)}
-                  >
-                    <Link href={item.href}>{item.label}</Link>
-                  </Button>
-                ))}
-                {isAuthed ? (
-                  <Button variant="outline" asChild onClick={() => setOpen(false)}>
-                    <Link href="/auth/logout">Logout</Link>
-                  </Button>
-                ) : (
-                  <Button asChild onClick={() => setOpen(false)}>
-                    <Link href="/auth/login">Sign in</Link>
-                  </Button>
-                )}
-              </div>
-            </SheetContent>
-          </Sheet>
-        </div>
       </div>
     </header>
   );

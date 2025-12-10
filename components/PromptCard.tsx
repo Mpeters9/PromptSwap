@@ -108,3 +108,5 @@ export function PromptCard({
     </motion.div>
   );
 }
+
+export default PromptCard;

@@ -21,7 +21,7 @@ if (!stripeSecretKey) {
 }
 
 const supabaseAdmin = createClient(supabaseUrl, supabaseServiceKey);
-const stripe = new Stripe(stripeSecretKey, { apiVersion: '2024-12-18' });
+const stripe = new Stripe(stripeSecretKey, { apiVersion: '2024-04-10' });
 
 function extractToken(req: NextRequest) {
   const authHeader = req.headers.get('authorization');

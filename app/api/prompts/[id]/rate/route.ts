@@ -27,7 +27,11 @@ async function getUserId(req: NextRequest) {
   return data.user.id;
 }
 
-export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
+export async function POST(
+  req: NextRequest,
+  context: { params: Promise<{ id: string }> }
+) {
+  const { id } = await context.params;
   const userId = await getUserId(req);
   if (!userId) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
@@ -51,7 +55,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   try {
     const { error: upsertError } = await supabaseAdmin.from('prompt_ratings').upsert(
       {
-        prompt_id: params.id,
+        prompt_id: id,
         user_id: userId,
         rating,
         comment,
@@ -65,13 +69,13 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     const { data: agg, error: aggError } = await supabaseAdmin
       .from('prompt_ratings')
       .select('avg(rating)')
-      .eq('prompt_id', params.id)
+      .eq('prompt_id', id)
       .single();
     if (aggError) throw aggError;
     const average = Number((agg as any)?.avg) || Number((agg as any)?.['avg']) || 0;
 
     // best-effort cache update; ignore if column missing
-    await supabaseAdmin.from('prompts').update({ average_rating: average }).eq('id', params.id);
+    await supabaseAdmin.from('prompts').update({ average_rating: average }).eq('id', id);
 
     return NextResponse.json({ rating, average });
   } catch (err: any) {

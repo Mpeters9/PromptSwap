@@ -21,11 +21,10 @@ export default async function PromptDetailPage({ params }: { params: { id: strin
       title: true,
       description: true,
       price: true,
-      category: true,
-      prompt_text: true,
-      preview_image: true,
+      promptText: true,
+      previewImage: true,
       user: {
-        select: { id: true, name: true, avatar_url: true },
+        select: { id: true, email: true },
       },
     },
   });
@@ -46,21 +45,21 @@ export default async function PromptDetailPage({ params }: { params: { id: strin
   }
 
   const moreFromCreator = await prisma.prompt.findMany({
-    where: { user_id: prompt.user?.id ?? undefined, NOT: { id: prompt.id } },
+    where: { userId: prompt.user?.id ?? undefined, NOT: { id: prompt.id } },
     take: 3,
     select: {
       id: true,
       title: true,
       description: true,
       price: true,
-      category: true,
-      preview_image: true,
+      previewImage: true,
     },
   });
 
-  const priceLabel = prompt.price && prompt.price > 0 ? `${Math.round(Number(prompt.price))} credits` : 'Free';
-  const creatorName = prompt.user?.name ?? 'Creator';
-  const creatorAvatar = prompt.user?.avatar_url ?? null;
+  const numericPrice = prompt.price ? Number(prompt.price) : 0;
+  const priceLabel = numericPrice > 0 ? `${Math.round(numericPrice)} credits` : 'Free';
+  const creatorName = prompt.user?.email ?? 'Creator';
+  const creatorAvatar = null;
 
   return (
     <div className="mx-auto max-w-6xl px-4 py-8 space-y-10">
@@ -103,11 +102,6 @@ export default async function PromptDetailPage({ params }: { params: { id: strin
                 </p>
               )}
 
-              {prompt.category && (
-                <Badge variant="secondary" className="w-fit">
-                  {prompt.category}
-                </Badge>
-              )}
             </div>
 
             <div className="flex flex-col items-end gap-3">
@@ -123,11 +117,11 @@ export default async function PromptDetailPage({ params }: { params: { id: strin
             </div>
           </div>
 
-          {prompt.preview_image && (
+          {prompt.previewImage && (
             <div className="overflow-hidden rounded-xl border border-slate-200">
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img
-                src={prompt.preview_image}
+                src={prompt.previewImage}
                 alt={prompt.title}
                 className="h-64 w-full object-cover"
                 loading="lazy"
@@ -163,8 +157,7 @@ export default async function PromptDetailPage({ params }: { params: { id: strin
                 title={item.title}
                 description={item.description ?? ''}
                 price={Number(item.price ?? 0)}
-                category={item.category ?? undefined}
-                previewImage={item.preview_image ?? undefined}
+                previewImage={item.previewImage ?? undefined}
                 authorName={creatorName}
                 authorAvatar={creatorAvatar}
               />

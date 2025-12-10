@@ -20,7 +20,7 @@ if (!stripeSecret) {
 }
 
 const supabaseAdmin = createClient(supabaseUrl, supabaseServiceKey);
-const stripe = new Stripe(stripeSecret, { apiVersion: '2024-11-15' });
+const stripe = new Stripe(stripeSecret, { apiVersion: '2024-04-10' });
 
 type ProfileRow = {
   stripe_account_id?: string | null;
@@ -98,7 +98,7 @@ export async function POST(req: NextRequest) {
     }
 
     const { data: profile, error: profileError } = await supabaseAdmin
-      .from<ProfileRow>('profiles')
+      .from('profiles')
       .select('stripe_account_id, connected_account_id')
       .eq('id', userId)
       .single();
@@ -115,7 +115,7 @@ export async function POST(req: NextRequest) {
     }
 
     const { data: purchases, error: purchasesError } = await supabaseAdmin
-      .from<PurchaseRow>('purchases')
+      .from('purchases')
       .select('price')
       .eq('seller_id', userId);
     if (purchasesError) {
@@ -124,7 +124,7 @@ export async function POST(req: NextRequest) {
     }
 
     const { data: paidOut, error: paidOutError } = await supabaseAdmin
-      .from<PayoutRow>('payouts')
+      .from('payouts')
       .select('amount')
       .eq('seller_id', userId);
     if (paidOutError) {

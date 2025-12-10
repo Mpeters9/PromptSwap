@@ -13,10 +13,14 @@ const RATE_LIMIT_MAX = 5; // max requests per window per identifier
 const rateLimitMap = new Map<string, number[]>();
 
 function getClientIdentifier(req: NextRequest) {
+  const forwardedFor = req.headers.get('x-forwarded-for')?.split(',')[0]?.trim();
+  const realIp = req.headers.get('x-real-ip');
+  const cfConnectingIp = req.headers.get('cf-connecting-ip');
+
   return (
-    req.ip ||
-    req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ||
-    req.headers.get('x-real-ip') ||
+    forwardedFor ||
+    realIp ||
+    cfConnectingIp ||
     'anonymous'
   );
 }
@@ -35,7 +39,11 @@ function checkRateLimit(identifier: string) {
   return true;
 }
 
-export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
+export async function POST(
+  req: NextRequest,
+  context: { params: Promise<{ id: string }> }
+) {
+  const { id } = await context.params;
   const identifier = getClientIdentifier(req);
   if (!checkRateLimit(identifier)) {
     return NextResponse.json({ error: 'Rate limit exceeded. Please wait a minute and try again.' }, { status: 429 });
@@ -58,7 +66,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
 
   try {
     const output = await runModelRequest({ model, apiKey, promptInput });
-    return NextResponse.json({ output, model, promptId: params.id });
+    return NextResponse.json({ output, model, promptId: id });
   } catch (err: any) {
     const message =
       err?.response?.data?.error?.message ||
@@ -74,7 +82,7 @@ async function runModelRequest({
   model,
   apiKey,
   promptInput,
-: { model: string; apiKey: string; promptInput: string }) {
+}: { model: string; apiKey: string; promptInput: string }) {
   // Route OpenAI vs Anthropic based on model naming.
   if (model.startsWith('claude')) {
     return runAnthropic({ model, apiKey, promptInput });
