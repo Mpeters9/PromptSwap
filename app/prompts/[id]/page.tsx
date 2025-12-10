@@ -1,14 +1,14 @@
 import { notFound, redirect } from 'next/navigation';
 
 import Link from 'next/link';
+import BuyButton from '@/components/BuyButton';
+import CopyButton from '@/components/CopyButton';
+import { PromptPreviewImage } from '@/components/PromptPreviewImage';
+import { Button } from '@/components/ui/button';
+import { Card, CardContent } from '@/components/ui/card';
 import { prisma } from '@/lib/prisma';
 import { getCurrentUser } from '@/lib/supabase-server';
 import ClientSections, { ActionPanel } from './ClientSections';
-import BuyButton from '@/components/BuyButton';
-import { PromptPreviewImage } from '@/components/PromptPreviewImage';
-import { Card, CardContent } from '@/components/ui/card';
-import { Button } from '@/components/ui/button';
-import { Card, CardContent } from '@/components/ui/card';
 
 export type Prompt = {
   id: string;
@@ -439,6 +439,15 @@ export default async function PromptDetailPage({ params }: { params: { id: strin
     take: 4,
   });
 
+  const promptTitle = prompt.title ?? 'Prompt';
+  const siteUrl = process.env.NEXT_PUBLIC_SITE_URL || 'http://localhost:3000';
+  const promptUrl = `${siteUrl}/prompts/${prompt.id}`;
+  const shareText = `${promptTitle} - ${promptUrl}`;
+  const tweetText = `Check out this AI prompt "${promptTitle}" on PromptSwap: ${promptUrl}`;
+  const tweetUrl = `https://twitter.com/intent/tweet?text=${encodeURIComponent(
+    tweetText,
+  )}`;
+
   return (
     <div className="mx-auto max-w-6xl px-4 py-12">
       <div className="grid gap-8 lg:grid-cols-[2fr,1fr]">
@@ -518,6 +527,38 @@ export default async function PromptDetailPage({ params }: { params: { id: strin
                   ))}
                 </div>
               )}
+
+              <div className="flex items-center justify-between gap-2">
+                <div>
+                  <h2 className="text-sm font-semibold">Share this prompt</h2>
+                  <p className="text-[11px] text-muted-foreground">
+                    Copy a shareable link or a ready-made snippet to post on social or
+                    send to a friend.
+                  </p>
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <CopyButton
+                    value={promptUrl}
+                    label="Copy link"
+                    copiedLabel="Link copied"
+                    size="sm"
+                  />
+                  <CopyButton
+                    value={shareText}
+                    label="Copy title + link"
+                    copiedLabel="Copied!"
+                    size="sm"
+                  />
+                  <a
+                    href={tweetUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="rounded-md border border-sky-500 bg-sky-500 px-3 py-1 text-[11px] font-medium text-white hover:bg-sky-600"
+                  >
+                    Tweet this
+                  </a>
+                </div>
+              </div>
 
               <p className="text-base text-slate-700 whitespace-pre-line">{prompt.description}</p>
 
