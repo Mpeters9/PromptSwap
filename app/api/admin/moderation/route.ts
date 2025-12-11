@@ -1,12 +1,11 @@
 import type { NextRequest } from 'next/server';
 import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
-import type { SupabaseClient } from '@supabase/supabase-js';
+import type { GenericSupabaseClient } from '@/lib/supabase-types';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-type GenericSupabaseClient = SupabaseClient<any, any, any, any, any>;
 type AdminProfileRow = { is_admin: boolean };
 
 function getSupabaseAdmin(): GenericSupabaseClient | null {

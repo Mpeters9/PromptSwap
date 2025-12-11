@@ -1,11 +1,9 @@
 import type { NextRequest } from 'next/server';
 import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
-import type { SupabaseClient } from '@supabase/supabase-js';
+import type { GenericSupabaseClient } from '@/lib/supabase-types';
 
 export const runtime = 'nodejs';
-
-type GenericSupabaseClient = SupabaseClient<any, any, any, any, any>;
 
 function getSupabaseAdmin(): GenericSupabaseClient | null {
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL?.trim();
