@@ -14,37 +14,55 @@ export default async function HomePage() {
   const currentUser = await getCurrentUser();
 
   // Basic marketplace stats
-  const [promptCount, purchasesCount, creatorGroups, prompts, purchaseGroups] =
-    await Promise.all([
-      prisma.prompt.count({
-        where: { isPublic: true },
-      }),
-      prisma.purchase.count(),
-      prisma.prompt.groupBy({
-        by: ["userId"],
-        where: {
-          isPublic: true,
-        },
-        _count: { userId: true },
-      }),
-      prisma.prompt.findMany({
-        where: { isPublic: true },
-        select: {
-          id: true,
-          title: true,
-          description: true,
-          previewImage: true,
-          price: true,
-          tags: true,
-          createdAt: true,
-          isFeatured: true,
-        },
-      }),
+  const [promptCount, purchasesCount, creatorGroups, prompts] = await Promise.all([
+    prisma.prompt.count({
+      where: { isPublic: true },
+    }),
+    prisma.purchase.count(),
+    prisma.prompt.groupBy({
+      by: ["userId"],
+      where: {
+        isPublic: true,
+      },
+      _count: { userId: true },
+    }),
+    prisma.prompt.findMany({
+      where: { isPublic: true },
+      select: {
+        id: true,
+        title: true,
+        description: true,
+        previewImage: true,
+        price: true,
+        tags: true,
+        createdAt: true,
+        isFeatured: true,
+      },
+    }),
+  ]);
+
+  let purchaseGroups: { promptId: number; _count: { promptId: number } }[] = [];
+  let ratingGroups: {
+    promptId: number | null;
+    _avg: { rating: number | null };
+    _count: { rating: number };
+  }[] = [];
+
+  try {
+    [purchaseGroups, ratingGroups] = await Promise.all([
       prisma.purchase.groupBy({
         by: ["promptId"],
         _count: { promptId: true },
       }),
+      prisma.promptRating.groupBy({
+        by: ["promptId"],
+        _avg: { rating: true },
+        _count: { rating: true },
+      }),
     ]);
+  } catch (error) {
+    console.error("[home] Failed to load purchase/rating aggregates", error);
+  }
 
   const creatorCount = creatorGroups.length;
 
@@ -54,6 +72,13 @@ export default async function HomePage() {
   }
 
   const ratingStatsByPromptId: Map<number, { avg: number | null; count: number }> = new Map();
+  for (const row of ratingGroups) {
+    if (row.promptId === null) continue;
+    ratingStatsByPromptId.set(row.promptId, {
+      avg: row._avg.rating ?? null,
+      count: row._count.rating,
+    });
+  }
 
   // Build a "featured" list by scoring prompts based on sales + rating + recency
   const scoredPrompts = prompts.map((p) => {

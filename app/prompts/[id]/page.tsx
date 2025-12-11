@@ -299,14 +299,21 @@ async function getAlsoBoughtPrompts(promptId: number): Promise<AlsoBoughtPrompt[
   }
 
   // 2) Group other purchases by promptId for those buyers
-  const coPurchases = await prisma.purchase.groupBy({
-    by: ['promptId'],
-    where: {
-      buyerId: { in: buyerIds },
-      promptId: { not: promptId },
-    },
-    _count: { promptId: true },
-  });
+  let coPurchases: { promptId: number; _count: { promptId: number } }[] = [];
+
+  try {
+    coPurchases = await prisma.purchase.groupBy({
+      by: ['promptId'],
+      where: {
+        buyerId: { in: buyerIds },
+        promptId: { not: promptId },
+      },
+      _count: { promptId: true },
+    });
+  } catch (error) {
+    console.error("[prompt detail] Failed to load also-bought coPurchases", error);
+    return [];
+  }
 
   if (coPurchases.length === 0) {
     return [];

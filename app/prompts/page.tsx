@@ -90,50 +90,61 @@ export default async function PromptsIndexPage({
   }
 
   // ---- Fetch prompts + aggregates in parallel ----
-  const [prompts, purchaseGroups, userPurchases, ratingGroups] =
-    await Promise.all([
-      prisma.prompt.findMany({
-        where,
-        orderBy,
-      }),
+  const [prompts, userPurchases] = await Promise.all([
+    prisma.prompt.findMany({
+      where,
+      orderBy,
+    }),
+    currentUserId
+      ? prisma.purchase.findMany({
+          where: {
+            buyerId: currentUserId,
+          },
+          select: {
+            promptId: true,
+          },
+        })
+      : Promise.resolve([] as { promptId: string }[]),
+  ]);
 
+  let purchaseGroups: { promptId: string; _count: { promptId: number } }[] = [];
+  let ratingGroups: {
+    promptId: string | null;
+    _avg: { rating: number | null };
+    _count: { rating: number };
+  }[] = [];
+
+  try {
+    [purchaseGroups, ratingGroups] = await Promise.all([
       prisma.purchase.groupBy({
         by: ["promptId"],
         _count: { promptId: true },
       }),
-
-      currentUserId
-        ? prisma.purchase.findMany({
-            where: {
-              buyerId: currentUserId,
-            },
-            select: {
-              promptId: true,
-            },
-          })
-        : Promise.resolve([] as { promptId: number }[]),
-
       prisma.promptRating.groupBy({
         by: ["promptId"],
         _avg: { rating: true },
         _count: { rating: true },
       }),
     ]);
+  } catch (error) {
+    console.error("[prompts] Failed to load aggregates", error);
+    // leave arrays empty so the UI still works with zero sales / no ratings
+  }
 
   // Maps for quick lookup: sales & ownership
-  const salesByPromptId = new Map<number, number>();
+  const salesByPromptId = new Map<string, number>();
   for (const row of purchaseGroups) {
     salesByPromptId.set(row.promptId, row._count.promptId);
   }
 
-  const ownedPromptIds = new Set<number>();
+  const ownedPromptIds = new Set<string>();
   for (const purchase of userPurchases) {
-    ownedPromptIds.add(purchase.promptId);
+    ownedPromptIds.add(String(purchase.promptId));
   }
 
   // Rating stats map
   const ratingStatsByPromptId = new Map<
-    number,
+    string,
     { avg: number | null; count: number }
   >();
   for (const row of ratingGroups) {
@@ -148,7 +159,7 @@ export default async function PromptsIndexPage({
   let filtered = prompts;
   if (minRating !== undefined && !Number.isNaN(minRating)) {
     filtered = filtered.filter((p) => {
-      const stats = ratingStatsByPromptId.get(p.id);
+      const stats = ratingStatsByPromptId.get(String(p.id));
       if (!stats || stats.avg === null) return false;
       return stats.avg >= minRating;
     });
@@ -159,14 +170,14 @@ export default async function PromptsIndexPage({
 
   if (sort === "sales") {
     sorted.sort((a, b) => {
-      const salesA = salesByPromptId.get(a.id) ?? 0;
-      const salesB = salesByPromptId.get(b.id) ?? 0;
+      const salesA = salesByPromptId.get(String(a.id)) ?? 0;
+      const salesB = salesByPromptId.get(String(b.id)) ?? 0;
       return salesB - salesA;
     });
   } else if (sort === "rating") {
     sorted.sort((a, b) => {
-      const ra = ratingStatsByPromptId.get(a.id);
-      const rb = ratingStatsByPromptId.get(b.id);
+      const ra = ratingStatsByPromptId.get(String(a.id));
+      const rb = ratingStatsByPromptId.get(String(b.id));
       const aAvg = ra?.avg ?? 0;
       const bAvg = rb?.avg ?? 0;
       if (bAvg === aAvg) {
@@ -357,13 +368,14 @@ export default async function PromptsIndexPage({
       ) : (
         <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
           {promptsToShow.map((prompt) => {
-            const salesCount = salesByPromptId.get(prompt.id) ?? 0;
-            const isOwned = ownedPromptIds.has(prompt.id);
+            const promptKey = String(prompt.id);
+            const salesCount = salesByPromptId.get(promptKey) ?? 0;
+            const isOwned = ownedPromptIds.has(promptKey);
             const priceNumber = prompt.price ? Number(prompt.price) : 0;
             const priceDisplay =
               priceNumber > 0 ? `$${priceNumber.toFixed(2)}` : "Free";
 
-            const ratingStats = ratingStatsByPromptId.get(prompt.id);
+            const ratingStats = ratingStatsByPromptId.get(promptKey);
             const avg = ratingStats?.avg ?? null;
             const ratingCount = ratingStats?.count ?? 0;
 

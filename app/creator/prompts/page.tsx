@@ -14,31 +14,39 @@ export default async function CreatorPromptsPage() {
     redirect("/signin");
   }
 
-  const [prompts, salesGroups, viewGroups] = await Promise.all([
-    prisma.prompt.findMany({
-      where: { userId: user.id },
-      orderBy: { createdAt: "desc" },
-    }),
-    prisma.purchase.groupBy({
-      by: ["promptId"],
-      _count: { promptId: true },
-      where: { sellerId: user.id },
-    }),
-    prisma.promptView.groupBy({
-      by: ["promptId"],
-      _count: { promptId: true },
-      where: {
-        prompt: {
-          userId: user.id,
-        },
-      },
-    }),
-  ]);
+  const prompts = await prisma.prompt.findMany({
+    where: { userId: user.id },
+    orderBy: { createdAt: "desc" },
+  });
 
-  const salesCountByPromptId = new Map<number, number>();
-  const viewsCountByPromptId = new Map<number, number>();
+  let salesGroups: { promptId: string; _count: { promptId: number } }[] = [];
+  let viewGroups: { promptId: string; _count: { promptId: number } }[] = [];
+
+  try {
+    [salesGroups, viewGroups] = await Promise.all([
+      prisma.purchase.groupBy({
+        by: ["promptId"],
+        _count: { promptId: true },
+        where: { sellerId: user.id },
+      }),
+      prisma.promptView.groupBy({
+        by: ["promptId"],
+        _count: { promptId: true },
+        where: {
+          prompt: {
+            userId: user.id,
+          },
+        },
+      }),
+    ]);
+  } catch (error) {
+    console.error("[creator/prompts] Failed to load creator aggregates", error);
+  }
+
+  const salesCountByPromptId = new Map<string, number>();
+  const viewsCountByPromptId = new Map<string, number>();
   let totalSales = 0;
-  let topPromptId: number | null = null;
+  let topPromptId: string | null = null;
   let topPromptSales = 0;
 
   for (const row of salesGroups) {
@@ -56,7 +64,7 @@ export default async function CreatorPromptsPage() {
   }
 
   const topPrompt = topPromptId
-    ? prompts.find((p) => p.id === topPromptId)
+    ? prompts.find((p) => String(p.id) === topPromptId)
     : null;
 
   const hasAnyPrompts = prompts.length > 0;
@@ -220,8 +228,9 @@ export default async function CreatorPromptsPage() {
       ) : (
         <div className="grid gap-4 md:grid-cols-2">
           {prompts.map((prompt) => {
-            const salesCount = salesCountByPromptId.get(prompt.id) ?? 0;
-            const viewsCount = viewsCountByPromptId.get(prompt.id) ?? 0;
+            const promptKey = String(prompt.id);
+            const salesCount = salesCountByPromptId.get(promptKey) ?? 0;
+            const viewsCount = viewsCountByPromptId.get(promptKey) ?? 0;
             const priceDisplay =
               prompt.price && Number(prompt.price) > 0
                 ? `$${Number(prompt.price).toFixed(2)}`
