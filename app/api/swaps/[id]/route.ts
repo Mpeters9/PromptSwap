@@ -4,14 +4,16 @@ import { createClient } from '@supabase/supabase-js';
 
 export const runtime = 'nodejs';
 
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-const supabaseServiceKey = process.env.NEXT_PRIVATE_SUPABASE_SERVICE_ROLE_KEY;
+function getSupabaseAdmin() {
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL?.trim();
+  const supabaseServiceKey = process.env.NEXT_PRIVATE_SUPABASE_SERVICE_ROLE_KEY?.trim();
 
-if (!supabaseUrl || !supabaseServiceKey) {
-  throw new Error('Supabase URL and service role key are required for swap routes.');
+  if (!supabaseUrl || !supabaseServiceKey) {
+    return null;
+  }
+
+  return createClient(supabaseUrl, supabaseServiceKey);
 }
-
-const supabaseAdmin = createClient(supabaseUrl, supabaseServiceKey);
 
 function getToken(req: NextRequest) {
   const authHeader = req.headers.get('authorization');
@@ -19,7 +21,7 @@ function getToken(req: NextRequest) {
   return authHeader.replace('Bearer ', '').trim();
 }
 
-async function getUserId(req: NextRequest) {
+async function getUserId(req: NextRequest, supabaseAdmin: ReturnType<typeof createClient>) {
   const token = getToken(req);
   if (!token) return null;
   const { data, error } = await supabaseAdmin.auth.getUser(token);
@@ -31,7 +33,15 @@ export async function PATCH(
   req: NextRequest,
   context: { params: Promise<{ id: string }> }
 ) {
-  const userId = await getUserId(req);
+  const supabaseAdmin = getSupabaseAdmin();
+  if (!supabaseAdmin) {
+    return NextResponse.json(
+      { error: 'Server misconfigured: Supabase URL and service role key are required for swap routes.' },
+      { status: 500 },
+    );
+  }
+
+  const userId = await getUserId(req, supabaseAdmin);
   if (!userId) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
   const { id } = await context.params;
@@ -72,7 +82,13 @@ export async function PATCH(
   }
 
   if (status === 'accepted') {
-    const copyResult = await copyPromptsBetweenUsers(swap.requested_prompt_id, swap.offered_prompt_id, swap.requester_id, swap.responder_id);
+    const copyResult = await copyPromptsBetweenUsers(
+      swap.requested_prompt_id,
+      swap.offered_prompt_id,
+      swap.requester_id,
+      swap.responder_id,
+      supabaseAdmin,
+    );
     if (copyResult.error) {
       return NextResponse.json({ error: copyResult.error }, { status: 500 });
     }
@@ -95,6 +111,7 @@ async function copyPromptsBetweenUsers(
   offeredPromptId: string,
   requesterId: string,
   responderId: string,
+  supabaseAdmin: ReturnType<typeof createClient>,
 ) {
   try {
     const { data: prompts, error } = await supabaseAdmin

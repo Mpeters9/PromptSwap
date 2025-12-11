@@ -4,16 +4,24 @@ import { createClient } from "@supabase/supabase-js";
 
 export const runtime = "nodejs";
 
-// Stripe in test mode (use your test secret key in .env.local)
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
-  apiVersion: '2024-04-10',
-});
+function getSupabaseClient() {
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL?.trim();
+  const supabaseServiceKey = process.env.NEXT_PRIVATE_SUPABASE_SERVICE_ROLE_KEY?.trim();
 
-// Supabase service client (we may use this later to log purchases, etc.)
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.NEXT_PRIVATE_SUPABASE_SERVICE_ROLE_KEY!,
-);
+  if (!supabaseUrl || !supabaseServiceKey) {
+    return null;
+  }
+
+  return createClient(supabaseUrl, supabaseServiceKey);
+}
+
+function getStripeClient() {
+  const stripeSecretKey = process.env.STRIPE_SECRET_KEY;
+  if (!stripeSecretKey) {
+    return null;
+  }
+  return new Stripe(stripeSecretKey, { apiVersion: '2024-04-10' });
+}
 
 // Payload shape expected from components/BuyButton.tsx
 type CheckoutRequestBody = {
@@ -24,6 +32,22 @@ type CheckoutRequestBody = {
 };
 
 export async function POST(req: Request) {
+  const supabase = getSupabaseClient();
+  if (!supabase) {
+    return NextResponse.json(
+      { error: "Server misconfigured: Supabase URL and service role key are required for checkout." },
+      { status: 500 },
+    );
+  }
+
+  const stripe = getStripeClient();
+  if (!stripe) {
+    return NextResponse.json(
+      { error: "Server misconfigured: STRIPE_SECRET_KEY is missing. Set it in .env.local." },
+      { status: 500 },
+    );
+  }
+
   try {
     const body = (await req.json()) as CheckoutRequestBody;
 

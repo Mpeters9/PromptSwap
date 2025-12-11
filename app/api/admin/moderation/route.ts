@@ -5,14 +5,16 @@ import { createClient } from '@supabase/supabase-js';
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-const supabaseServiceKey = process.env.NEXT_PRIVATE_SUPABASE_SERVICE_ROLE_KEY;
+function getSupabaseAdmin() {
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL?.trim();
+  const supabaseServiceKey = process.env.NEXT_PRIVATE_SUPABASE_SERVICE_ROLE_KEY?.trim();
 
-if (!supabaseUrl || !supabaseServiceKey) {
-  throw new Error('Supabase URL and service role key are required for admin routes.');
+  if (!supabaseUrl || !supabaseServiceKey) {
+    return null;
+  }
+
+  return createClient(supabaseUrl, supabaseServiceKey);
 }
-
-const supabaseAdmin = createClient(supabaseUrl, supabaseServiceKey);
 
 function getToken(req: NextRequest) {
   const authHeader = req.headers.get('authorization');
@@ -20,7 +22,7 @@ function getToken(req: NextRequest) {
   return authHeader.replace('Bearer ', '').trim();
 }
 
-async function getUser(req: NextRequest) {
+async function getUser(req: NextRequest, supabaseAdmin: ReturnType<typeof createClient>) {
   const token = getToken(req);
   if (!token) return null;
   const { data, error } = await supabaseAdmin.auth.getUser(token);
@@ -28,18 +30,26 @@ async function getUser(req: NextRequest) {
   return data.user;
 }
 
-async function assertAdmin(userId: string) {
+async function assertAdmin(userId: string, supabaseAdmin: ReturnType<typeof createClient>) {
   const { data, error } = await supabaseAdmin.from('profiles').select('is_admin').eq('id', userId).single();
   if (error) throw error;
   if (!data?.is_admin) throw new Error('Forbidden');
 }
 
 export async function GET(req: NextRequest) {
-  const user = await getUser(req);
+  const supabaseAdmin = getSupabaseAdmin();
+  if (!supabaseAdmin) {
+    return NextResponse.json(
+      { error: 'Server misconfigured: Supabase URL and service role key are required for admin routes.' },
+      { status: 500 },
+    );
+  }
+
+  const user = await getUser(req, supabaseAdmin);
   if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
   try {
-    await assertAdmin(user.id);
+    await assertAdmin(user.id, supabaseAdmin);
   } catch (err: any) {
     const status = err.message === 'Forbidden' ? 403 : 500;
     return NextResponse.json({ error: err.message ?? 'Forbidden' }, { status });
@@ -89,11 +99,19 @@ type ActionBody =
   | { action: 'ban'; userId: string };
 
 export async function POST(req: NextRequest) {
-  const user = await getUser(req);
+  const supabaseAdmin = getSupabaseAdmin();
+  if (!supabaseAdmin) {
+    return NextResponse.json(
+      { error: 'Server misconfigured: Supabase URL and service role key are required for admin routes.' },
+      { status: 500 },
+    );
+  }
+
+  const user = await getUser(req, supabaseAdmin);
   if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
   try {
-    await assertAdmin(user.id);
+    await assertAdmin(user.id, supabaseAdmin);
   } catch (err: any) {
     const status = err.message === 'Forbidden' ? 403 : 500;
     return NextResponse.json({ error: err.message ?? 'Forbidden' }, { status });

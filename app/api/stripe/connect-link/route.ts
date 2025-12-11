@@ -6,24 +6,28 @@ import { createClient } from '@supabase/supabase-js';
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-const supabaseServiceKey = process.env.NEXT_PRIVATE_SUPABASE_SERVICE_ROLE_KEY;
-const stripeSecretKey = process.env.STRIPE_SECRET_KEY;
 const siteUrl = process.env.NEXT_PUBLIC_SITE_URL || 'http://localhost:3000';
-const projectRef = supabaseUrl?.replace(/^https?:\/\//, '').split('.')[0];
 
-if (!supabaseUrl || !supabaseServiceKey) {
-  throw new Error('Supabase URL and service role key must be set for Stripe connect-link.');
+function getSupabaseAdmin() {
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL?.trim();
+  const supabaseServiceKey = process.env.NEXT_PRIVATE_SUPABASE_SERVICE_ROLE_KEY?.trim();
+
+  if (!supabaseUrl || !supabaseServiceKey) {
+    return null;
+  }
+
+  return createClient(supabaseUrl, supabaseServiceKey);
 }
 
-if (!stripeSecretKey) {
-  throw new Error('STRIPE_SECRET_KEY is missing. Set it in .env.local.');
+function getStripeClient() {
+  const stripeSecretKey = process.env.STRIPE_SECRET_KEY;
+  if (!stripeSecretKey) {
+    return null;
+  }
+  return new Stripe(stripeSecretKey, { apiVersion: '2024-04-10' });
 }
 
-const supabaseAdmin = createClient(supabaseUrl, supabaseServiceKey);
-const stripe = new Stripe(stripeSecretKey, { apiVersion: '2024-04-10' });
-
-function extractToken(req: NextRequest) {
+function extractToken(req: NextRequest, projectRef?: string) {
   const authHeader = req.headers.get('authorization');
   if (authHeader?.toLowerCase().startsWith('bearer ')) {
     return authHeader.replace(/^[Bb]earer\s+/, '').trim();
@@ -48,7 +52,27 @@ function extractToken(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
   try {
-    const token = extractToken(req);
+    const supabaseAdmin = getSupabaseAdmin();
+    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL?.trim();
+    const stripe = getStripeClient();
+
+    if (!supabaseAdmin || !supabaseUrl) {
+      return NextResponse.json(
+        { error: 'Server misconfigured: Supabase URL and service role key must be set for Stripe connect-link.' },
+        { status: 500 },
+      );
+    }
+
+    if (!stripe) {
+      return NextResponse.json(
+        { error: 'Server misconfigured: STRIPE_SECRET_KEY is missing. Set it in .env.local.' },
+        { status: 500 },
+      );
+    }
+
+    const projectRef = supabaseUrl.replace(/^https?:\/\//, '').split('.')[0];
+
+    const token = extractToken(req, projectRef);
     if (!token) {
       console.error('Stripe connect-link: missing auth token');
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });

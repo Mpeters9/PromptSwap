@@ -6,11 +6,15 @@ import { logError } from '@/lib/logger';
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL?.trim() ?? '';
-const supabaseServiceKey = process.env.NEXT_PRIVATE_SUPABASE_SERVICE_ROLE_KEY?.trim() ?? '';
+function getSupabaseAdmin() {
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL?.trim();
+  const supabaseServiceKey = process.env.NEXT_PRIVATE_SUPABASE_SERVICE_ROLE_KEY?.trim();
 
-if (!supabaseUrl || !supabaseServiceKey) {
-  throw new Error('Supabase URL and service role key are required for purchases.');
+  if (!supabaseUrl || !supabaseServiceKey) {
+    return null;
+  }
+
+  return createClient(supabaseUrl, supabaseServiceKey);
 }
 
 type PurchaseBody = {
@@ -38,6 +42,17 @@ function rateLimit(key: string) {
 }
 
 export async function POST(req: Request) {
+  const supabaseAdmin = getSupabaseAdmin();
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL?.trim();
+  const supabaseServiceKey = process.env.NEXT_PRIVATE_SUPABASE_SERVICE_ROLE_KEY?.trim();
+
+  if (!supabaseAdmin || !supabaseUrl || !supabaseServiceKey) {
+    return NextResponse.json(
+      { error: 'Server misconfigured: Supabase URL and service role key are required for purchases.' },
+      { status: 500 }
+    );
+  }
+
   const cookieStore = await cookies();
   const accessToken = cookieStore.get("sb-access-token")?.value ?? "";
   const supabase = createClient(supabaseUrl, supabaseServiceKey, {
@@ -45,7 +60,6 @@ export async function POST(req: Request) {
       headers: accessToken ? { Authorization: `Bearer ${accessToken}` } : {},
     },
   });
-  const supabaseAdmin = createClient(supabaseUrl, supabaseServiceKey);
 
   try {
     const ip = (req.headers.get('x-forwarded-for') || '').split(',')[0] || 'unknown';

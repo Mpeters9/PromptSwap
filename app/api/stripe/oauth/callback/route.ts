@@ -5,20 +5,26 @@ import { createClient } from '@supabase/supabase-js';
 
 export const runtime = 'nodejs';
 
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-const supabaseServiceKey = process.env.NEXT_PRIVATE_SUPABASE_SERVICE_ROLE_KEY;
-const stripeSecretKey = process.env.STRIPE_SECRET_KEY;
 const siteUrl = process.env.NEXT_PUBLIC_SITE_URL || 'http://localhost:3000';
 
-if (!supabaseUrl || !supabaseServiceKey) {
-  throw new Error('Supabase URL and service role key are required.');
-}
-if (!stripeSecretKey) {
-  throw new Error('STRIPE_SECRET_KEY is required.');
+function getSupabaseAdmin() {
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL?.trim();
+  const supabaseServiceKey = process.env.NEXT_PRIVATE_SUPABASE_SERVICE_ROLE_KEY?.trim();
+
+  if (!supabaseUrl || !supabaseServiceKey) {
+    return null;
+  }
+
+  return createClient(supabaseUrl, supabaseServiceKey);
 }
 
-const supabase = createClient(supabaseUrl, supabaseServiceKey);
-const stripe = new Stripe(stripeSecretKey, { apiVersion: '2024-04-10' });
+function getStripeClient() {
+  const stripeSecretKey = process.env.STRIPE_SECRET_KEY;
+  if (!stripeSecretKey) {
+    return null;
+  }
+  return new Stripe(stripeSecretKey, { apiVersion: '2024-04-10' });
+}
 
 function getToken(req: NextRequest) {
   const authHeader = req.headers.get('authorization');
@@ -26,7 +32,7 @@ function getToken(req: NextRequest) {
   return authHeader.replace('Bearer ', '').trim();
 }
 
-async function getUserId(req: NextRequest) {
+async function getUserId(req: NextRequest, supabase: ReturnType<typeof createClient>) {
   const token = getToken(req);
   if (!token) return null;
   const { data, error } = await supabase.auth.getUser(token);
@@ -35,6 +41,19 @@ async function getUserId(req: NextRequest) {
 }
 
 export async function GET(req: NextRequest) {
+  const supabase = getSupabaseAdmin();
+  if (!supabase) {
+    return NextResponse.json(
+      { error: 'Server misconfigured: Supabase URL and service role key are required.' },
+      { status: 500 },
+    );
+  }
+
+  const stripe = getStripeClient();
+  if (!stripe) {
+    return NextResponse.json({ error: 'Server misconfigured: STRIPE_SECRET_KEY is required.' }, { status: 500 });
+  }
+
   const { searchParams } = new URL(req.url);
   const code = searchParams.get('code');
   const error = searchParams.get('error');
@@ -46,7 +65,7 @@ export async function GET(req: NextRequest) {
     return NextResponse.redirect(`${siteUrl}/dashboard?stripe=missing_code`);
   }
 
-  const userId = await getUserId(req);
+  const userId = await getUserId(req, supabase);
   if (!userId) {
     return NextResponse.redirect(`${siteUrl}/auth/sign-in?redirect=/dashboard`);
   }
