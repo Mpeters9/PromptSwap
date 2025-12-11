@@ -10,36 +10,46 @@ import { PromptPreviewImage } from "@/components/PromptPreviewImage";
 
 export const dynamic = "force-dynamic";
 
+type PromptWithRelations = Awaited<ReturnType<typeof prisma.prompt.findMany>>[number];
+
 export default async function HomePage() {
   const currentUser = await getCurrentUser();
 
-  // Basic marketplace stats
-  const [promptCount, purchasesCount, creatorGroups, prompts] = await Promise.all([
-    prisma.prompt.count({
-      where: { isPublic: true },
-    }),
-    prisma.purchase.count(),
-    prisma.prompt.groupBy({
-      by: ["userId"],
-      where: {
-        isPublic: true,
-      },
-      _count: { userId: true },
-    }),
-    prisma.prompt.findMany({
-      where: { isPublic: true },
-      select: {
-        id: true,
-        title: true,
-        description: true,
-        previewImage: true,
-        price: true,
-        tags: true,
-        createdAt: true,
-        isFeatured: true,
-      },
-    }),
-  ]);
+  let promptCount = 0;
+  let purchasesCount = 0;
+  let creatorGroups: { userId: string | null; _count: { userId: number } }[] = [];
+  let prompts: PromptWithRelations[] = [];
+
+  try {
+    const [promptCountResult, purchasesCountResult, creatorGroupsResult, promptsResult] =
+      await Promise.all([
+        prisma.prompt.count({
+          where: { isPublic: true },
+        }),
+        prisma.purchase.count(),
+        prisma.prompt.groupBy({
+          by: ["userId"],
+          _count: { userId: true },
+          where: { isPublic: true },
+        }),
+        prisma.prompt.findMany({
+          where: { isPublic: true },
+          orderBy: { createdAt: "desc" },
+          take: 12,
+          include: {
+            user: true,
+          },
+        }),
+      ]);
+
+    promptCount = promptCountResult;
+    purchasesCount = purchasesCountResult;
+    creatorGroups = creatorGroupsResult;
+    prompts = promptsResult;
+  } catch (error) {
+    console.error("[home] Failed to load primary marketplace data", error);
+    // defaults remain
+  }
 
   let purchaseGroups: { promptId: number; _count: { promptId: number } }[] = [];
   let ratingGroups: {

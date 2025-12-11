@@ -8,16 +8,27 @@ import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@/com
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 
+type CreatorPromptWithStats = Awaited<ReturnType<typeof prisma.prompt.findMany>>[number];
+
 export default async function CreatorPromptsPage() {
   const user = await getCurrentUser();
   if (!user) {
     redirect("/signin");
   }
 
-  const prompts = await prisma.prompt.findMany({
-    where: { userId: user.id },
-    orderBy: { createdAt: "desc" },
-  });
+  let prompts: CreatorPromptWithStats[] = [];
+
+  try {
+    prompts = await prisma.prompt.findMany({
+      where: { userId: user.id },
+      orderBy: { createdAt: "desc" },
+      include: {
+        user: true,
+      },
+    });
+  } catch (error) {
+    console.error("[creator/prompts] Failed to load creator prompts", error);
+  }
 
   let salesGroups: { promptId: number; _count: { promptId: number } }[] = [];
   let viewGroups: { promptId: number; _count: { promptId: number } }[] = [];

@@ -9,6 +9,8 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { PromptPreviewImage } from "@/components/PromptPreviewImage";
 
+type PromptWithRelations = Awaited<ReturnType<typeof prisma.prompt.findMany>>[number];
+
 type SearchParams = {
   q?: string | string[];
   priceFilter?: string | string[];
@@ -89,23 +91,29 @@ export default async function PromptsIndexPage({
     orderBy = { price: "desc" };
   }
 
-  // ---- Fetch prompts + aggregates in parallel ----
-  const [prompts, userPurchases] = await Promise.all([
-    prisma.prompt.findMany({
-      where,
-      orderBy,
-    }),
-    currentUserId
-      ? prisma.purchase.findMany({
-          where: {
-            buyerId: currentUserId,
-          },
-          select: {
-            promptId: true,
-          },
-        })
-      : Promise.resolve([] as { promptId: number }[]),
-  ]);
+  let prompts: PromptWithRelations[] = [];
+  let userPurchases: { promptId: number }[] = [];
+
+  try {
+    [prompts, userPurchases] = await Promise.all([
+      prisma.prompt.findMany({
+        where,
+        orderBy,
+        include: {
+          user: true,
+        },
+      }),
+      currentUser
+        ? prisma.purchase.findMany({
+            where: { buyerId: currentUser.id },
+            select: { promptId: true },
+          })
+        : Promise.resolve([] as { promptId: number }[]),
+    ]);
+  } catch (error) {
+    console.error("[prompts] Failed to load prompts/user purchases", error);
+    // defaults remain
+  }
 
   let purchaseGroups: { promptId: number; _count: { promptId: number } }[] = [];
   let ratingGroups: {
