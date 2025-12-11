@@ -1,11 +1,15 @@
 import type { NextRequest } from 'next/server';
 import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
+import type { SupabaseClient } from '@supabase/supabase-js';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-function getSupabaseAdmin() {
+type GenericSupabaseClient = SupabaseClient<any, any, any, any, any>;
+type AdminProfileRow = { is_admin: boolean };
+
+function getSupabaseAdmin(): GenericSupabaseClient | null {
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL?.trim();
   const supabaseServiceKey = process.env.NEXT_PRIVATE_SUPABASE_SERVICE_ROLE_KEY?.trim();
 
@@ -13,7 +17,7 @@ function getSupabaseAdmin() {
     return null;
   }
 
-  return createClient(supabaseUrl, supabaseServiceKey);
+  return createClient(supabaseUrl, supabaseServiceKey) as GenericSupabaseClient;
 }
 
 function getToken(req: NextRequest) {
@@ -22,7 +26,7 @@ function getToken(req: NextRequest) {
   return authHeader.replace('Bearer ', '').trim();
 }
 
-async function getUser(req: NextRequest, supabaseAdmin: ReturnType<typeof createClient>) {
+async function getUser(req: NextRequest, supabaseAdmin: GenericSupabaseClient) {
   const token = getToken(req);
   if (!token) return null;
   const { data, error } = await supabaseAdmin.auth.getUser(token);
@@ -30,10 +34,17 @@ async function getUser(req: NextRequest, supabaseAdmin: ReturnType<typeof create
   return data.user;
 }
 
-async function assertAdmin(userId: string, supabaseAdmin: ReturnType<typeof createClient>) {
-  const { data, error } = await supabaseAdmin.from('profiles').select('is_admin').eq('id', userId).single();
+async function assertAdmin(userId: string, supabaseAdmin: GenericSupabaseClient) {
+  const { data: profile, error } = await supabaseAdmin
+    .from('profiles')
+    .select('is_admin')
+    .eq('id', userId)
+    .single<AdminProfileRow>();
   if (error) throw error;
-  if (!data?.is_admin) throw new Error('Forbidden');
+
+  if (!profile?.is_admin) {
+    throw new Error('Forbidden');
+  }
 }
 
 export async function GET(req: NextRequest) {
