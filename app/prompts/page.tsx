@@ -104,12 +104,12 @@ export default async function PromptsIndexPage({
             promptId: true,
           },
         })
-      : Promise.resolve([] as { promptId: string }[]),
+      : Promise.resolve([] as { promptId: number }[]),
   ]);
 
-  let purchaseGroups: { promptId: string; _count: { promptId: number } }[] = [];
+  let purchaseGroups: { promptId: number; _count: { promptId: number } }[] = [];
   let ratingGroups: {
-    promptId: string | null;
+    promptId: number | null;
     _avg: { rating: number | null };
     _count: { rating: number };
   }[] = [];
@@ -132,19 +132,19 @@ export default async function PromptsIndexPage({
   }
 
   // Maps for quick lookup: sales & ownership
-  const salesByPromptId = new Map<string, number>();
+  const salesByPromptId = new Map<number, number>();
   for (const row of purchaseGroups) {
     salesByPromptId.set(row.promptId, row._count.promptId);
   }
 
-  const ownedPromptIds = new Set<string>();
+  const ownedPromptIds = new Set<number>();
   for (const purchase of userPurchases) {
-    ownedPromptIds.add(String(purchase.promptId));
+    ownedPromptIds.add(purchase.promptId);
   }
 
   // Rating stats map
   const ratingStatsByPromptId = new Map<
-    string,
+    number,
     { avg: number | null; count: number }
   >();
   for (const row of ratingGroups) {
@@ -159,7 +159,7 @@ export default async function PromptsIndexPage({
   let filtered = prompts;
   if (minRating !== undefined && !Number.isNaN(minRating)) {
     filtered = filtered.filter((p) => {
-      const stats = ratingStatsByPromptId.get(String(p.id));
+      const stats = ratingStatsByPromptId.get(p.id);
       if (!stats || stats.avg === null) return false;
       return stats.avg >= minRating;
     });
@@ -170,14 +170,14 @@ export default async function PromptsIndexPage({
 
   if (sort === "sales") {
     sorted.sort((a, b) => {
-      const salesA = salesByPromptId.get(String(a.id)) ?? 0;
-      const salesB = salesByPromptId.get(String(b.id)) ?? 0;
+      const salesA = salesByPromptId.get(a.id) ?? 0;
+      const salesB = salesByPromptId.get(b.id) ?? 0;
       return salesB - salesA;
     });
   } else if (sort === "rating") {
     sorted.sort((a, b) => {
-      const ra = ratingStatsByPromptId.get(String(a.id));
-      const rb = ratingStatsByPromptId.get(String(b.id));
+      const ra = ratingStatsByPromptId.get(a.id);
+      const rb = ratingStatsByPromptId.get(b.id);
       const aAvg = ra?.avg ?? 0;
       const bAvg = rb?.avg ?? 0;
       if (bAvg === aAvg) {
@@ -368,7 +368,7 @@ export default async function PromptsIndexPage({
       ) : (
         <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
           {promptsToShow.map((prompt) => {
-            const promptKey = String(prompt.id);
+            const promptKey = prompt.id;
             const salesCount = salesByPromptId.get(promptKey) ?? 0;
             const isOwned = ownedPromptIds.has(promptKey);
             const priceNumber = prompt.price ? Number(prompt.price) : 0;

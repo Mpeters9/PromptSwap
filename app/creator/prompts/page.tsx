@@ -19,8 +19,8 @@ export default async function CreatorPromptsPage() {
     orderBy: { createdAt: "desc" },
   });
 
-  let salesGroups: { promptId: string; _count: { promptId: number } }[] = [];
-  let viewGroups: { promptId: string; _count: { promptId: number } }[] = [];
+  let salesGroups: { promptId: number; _count: { promptId: number } }[] = [];
+  let viewGroups: { promptId: number; _count: { promptId: number } }[] = [];
 
   try {
     [salesGroups, viewGroups] = await Promise.all([
@@ -43,10 +43,10 @@ export default async function CreatorPromptsPage() {
     console.error("[creator/prompts] Failed to load creator aggregates", error);
   }
 
-  const salesCountByPromptId = new Map<string, number>();
-  const viewsCountByPromptId = new Map<string, number>();
+  const salesCountByPromptId = new Map<number, number>();
+  const viewsCountByPromptId = new Map<number, number>();
   let totalSales = 0;
-  let topPromptId: string | null = null;
+  let topPromptId: number | null = null;
   let topPromptSales = 0;
 
   for (const row of salesGroups) {
@@ -64,7 +64,7 @@ export default async function CreatorPromptsPage() {
   }
 
   const topPrompt = topPromptId
-    ? prompts.find((p) => String(p.id) === topPromptId)
+    ? prompts.find((p) => p.id === topPromptId)
     : null;
 
   const hasAnyPrompts = prompts.length > 0;
@@ -228,7 +228,7 @@ export default async function CreatorPromptsPage() {
       ) : (
         <div className="grid gap-4 md:grid-cols-2">
           {prompts.map((prompt) => {
-            const promptKey = String(prompt.id);
+            const promptKey = prompt.id;
             const salesCount = salesCountByPromptId.get(promptKey) ?? 0;
             const viewsCount = viewsCountByPromptId.get(promptKey) ?? 0;
             const priceDisplay =
