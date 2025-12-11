@@ -1,22 +1,10 @@
 {
+  "version": 2,
+  "framework": "nextjs",
+  "buildCommand": "npm run vercel-build",
   "functions": {
-    "app/api/**/route.ts": {
-      "runtime": "nodejs18.x"
-    },
-    "app/api/**/route.js": {
-      "runtime": "nodejs18.x"
+    "api/**/*": {
+      "runtime": "nodejs20.x"
     }
-  },
-  "routes": [
-    {
-      "src": "/api/stripe/webhook",
-      "dest": "/api/stripe/webhook",
-      "methods": ["POST"]
-    },
-    {
-      "src": "/stripe/webhook",
-      "dest": "/api/stripe/webhook",
-      "methods": ["POST"]
-    }
-  ]
+  }
 }
