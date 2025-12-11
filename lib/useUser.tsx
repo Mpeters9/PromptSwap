@@ -67,7 +67,7 @@ export function ProtectedRoute({ children }: ProtectedRouteProps) {
 
   useEffect(() => {
     if (!loading && !user) {
-      router.replace('/auth/sign-in');
+      router.replace('/auth/login');
     }
   }, [loading, router, user]);
 

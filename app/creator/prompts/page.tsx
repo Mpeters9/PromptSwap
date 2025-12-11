@@ -8,33 +8,22 @@ import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@/com
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 
-type CreatorPromptWithStats = Awaited<ReturnType<typeof prisma.prompt.findMany>>[number];
-
 export default async function CreatorPromptsPage() {
   const user = await getCurrentUser();
   if (!user) {
-    redirect("/signin");
+    redirect("/auth/login");
   }
 
-  let prompts: CreatorPromptWithStats[] = [];
+  let prompts: any[] = [];
+  let salesGroups: any[] = [];
+  let viewGroups: any[] = [];
 
   try {
-    prompts = await prisma.prompt.findMany({
-      where: { userId: user.id },
-      orderBy: { createdAt: "desc" },
-      include: {
-        user: true,
-      },
-    });
-  } catch (error) {
-    console.error("[creator/prompts] Failed to load creator prompts", error);
-  }
-
-  let salesGroups: { promptId: number; _count: { promptId: number } }[] = [];
-  let viewGroups: { promptId: number; _count: { promptId: number } }[] = [];
-
-  try {
-    [salesGroups, viewGroups] = await Promise.all([
+    [prompts, salesGroups, viewGroups] = await Promise.all([
+      prisma.prompt.findMany({
+        where: { userId: user.id },
+        orderBy: { createdAt: "desc" },
+      }),
       prisma.purchase.groupBy({
         by: ["promptId"],
         _count: { promptId: true },
@@ -51,7 +40,7 @@ export default async function CreatorPromptsPage() {
       }),
     ]);
   } catch (error) {
-    console.error("[creator/prompts] Failed to load creator aggregates", error);
+    console.error("[creator/prompts] Failed to load creator prompts/analytics", error);
   }
 
   const salesCountByPromptId = new Map<number, number>();
@@ -265,7 +254,7 @@ export default async function CreatorPromptsPage() {
                     <div className="flex flex-wrap items-center gap-2">
                       <Badge variant="outline">{priceDisplay}</Badge>
                       {Array.isArray(prompt.tags) &&
-                        prompt.tags.slice(0, 2).map((tag) => (
+                        prompt.tags.slice(0, 2).map((tag: string) => (
                           <Badge key={tag} variant="secondary">
                             {tag}
                           </Badge>

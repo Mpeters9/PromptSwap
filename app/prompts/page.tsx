@@ -26,26 +26,36 @@ export const dynamic = "force-dynamic";
 export default async function PromptsIndexPage({
   searchParams,
 }: {
-  searchParams: SearchParams;
+  searchParams: Promise<SearchParams>;
 }) {
+  const resolvedSearchParams = await searchParams;
   const currentUser = await getCurrentUser();
   const currentUserId = currentUser?.id ?? null;
 
+  const safeFetch = async <T,>(fn: () => Promise<T>, fallback: T, label: string) => {
+    try {
+      return await fn();
+    } catch (error) {
+      console.error(`[prompts] ${label} failed`, error);
+      return fallback;
+    }
+  };
+
   // ---- Read search params (normalize to strings) ----
-  const q = typeof searchParams.q === "string" ? searchParams.q.trim() : "";
+  const q = typeof resolvedSearchParams.q === "string" ? resolvedSearchParams.q.trim() : "";
   const priceFilter =
-    typeof searchParams.priceFilter === "string"
-      ? searchParams.priceFilter
+    typeof resolvedSearchParams.priceFilter === "string"
+      ? resolvedSearchParams.priceFilter
       : "all";
   const minPriceRaw =
-    typeof searchParams.minPrice === "string" ? searchParams.minPrice : "";
+    typeof resolvedSearchParams.minPrice === "string" ? resolvedSearchParams.minPrice : "";
   const maxPriceRaw =
-    typeof searchParams.maxPrice === "string" ? searchParams.maxPrice : "";
+    typeof resolvedSearchParams.maxPrice === "string" ? resolvedSearchParams.maxPrice : "";
   const minRatingRaw =
-    typeof searchParams.minRating === "string" ? searchParams.minRating : "";
-  const tag = typeof searchParams.tag === "string" ? searchParams.tag.trim() : "";
+    typeof resolvedSearchParams.minRating === "string" ? resolvedSearchParams.minRating : "";
+  const tag = typeof resolvedSearchParams.tag === "string" ? resolvedSearchParams.tag.trim() : "";
   const sort =
-    typeof searchParams.sort === "string" ? searchParams.sort : "latest";
+    typeof resolvedSearchParams.sort === "string" ? resolvedSearchParams.sort : "latest";
 
   const minPrice = minPriceRaw ? parseFloat(minPriceRaw) : undefined;
   const maxPrice = maxPriceRaw ? parseFloat(maxPriceRaw) : undefined;
@@ -91,53 +101,59 @@ export default async function PromptsIndexPage({
     orderBy = { price: "desc" };
   }
 
-  let prompts: PromptWithRelations[] = [];
-  let userPurchases: { promptId: number }[] = [];
+  // ---- Fetch prompts + aggregates in parallel ----
+  // All of this is best-effort so Prisma connection pool hiccups
+  // don't crash the marketplace page.
+  let prompts: any[] = [];
+  let purchaseGroups: any[] = [];
+  let userPurchases: any[] = [];
+  let ratingGroups: any[] = [];
 
-  try {
-    [prompts, userPurchases] = await Promise.all([
+  prompts = await safeFetch(
+    () =>
       prisma.prompt.findMany({
         where,
         orderBy,
-        include: {
-          user: true,
-        },
+        take: 200, // keep the query bounded to avoid overwhelming the pool
       }),
-      currentUser
-        ? prisma.purchase.findMany({
-            where: { buyerId: currentUser.id },
-            select: { promptId: true },
-          })
-        : Promise.resolve([] as { promptId: number }[]),
-    ]);
-  } catch (error) {
-    console.error("[prompts] Failed to load prompts/user purchases", error);
-    // defaults remain
-  }
+    [],
+    "prompts",
+  );
 
-  let purchaseGroups: { promptId: number; _count: { promptId: number } }[] = [];
-  let ratingGroups: {
-    promptId: number | null;
-    _avg: { rating: number | null };
-    _count: { rating: number };
-  }[] = [];
-
-  try {
-    [purchaseGroups, ratingGroups] = await Promise.all([
+  purchaseGroups = await safeFetch(
+    () =>
       prisma.purchase.groupBy({
         by: ["promptId"],
         _count: { promptId: true },
       }),
+    [],
+    "purchase groupBy",
+  );
+
+  userPurchases = currentUserId
+    ? await safeFetch(
+        () =>
+          prisma.purchase.findMany({
+            where: {
+              buyerId: currentUserId,
+            },
+            select: { promptId: true },
+          }),
+        [],
+        "user purchases",
+      )
+    : [];
+
+  ratingGroups = await safeFetch(
+    () =>
       prisma.promptRating.groupBy({
         by: ["promptId"],
         _avg: { rating: true },
         _count: { rating: true },
       }),
-    ]);
-  } catch (error) {
-    console.error("[prompts] Failed to load aggregates", error);
-    // leave arrays empty so the UI still works with zero sales / no ratings
-  }
+    [],
+    "rating groupBy",
+  );
 
   // Maps for quick lookup: sales & ownership
   const salesByPromptId = new Map<number, number>();
@@ -415,7 +431,7 @@ export default async function PromptsIndexPage({
                         {priceDisplay}
                       </Badge>
                       {Array.isArray(prompt.tags) &&
-                        prompt.tags.slice(0, 3).map((tagValue) => (
+                        prompt.tags.slice(0, 3).map((tagValue: string) => (
                           <Badge
                             key={tagValue}
                             variant="secondary"

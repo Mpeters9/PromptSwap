@@ -62,7 +62,7 @@ export async function startTestSession(formData: FormData) {
 
   const user = await getCurrentUser();
   if (!user) {
-    redirect('/signin');
+    redirect('/auth/login');
   }
 
   // Fetch the prompt text from Prisma
@@ -129,7 +129,7 @@ export async function ratePrompt(formData: FormData) {
 
   const user = await getCurrentUser();
   if (!user) {
-    redirect('/signin');
+      redirect('/auth/login');
   }
 
   const promptId = (formData.get('prompt_id') ?? '').toString().trim();

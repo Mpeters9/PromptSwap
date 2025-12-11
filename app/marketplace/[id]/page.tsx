@@ -1,6 +1,4 @@
-import { PrismaClient } from '@prisma/client';
 import Link from 'next/link';
-import { motion } from 'framer-motion';
 
 import { PromptCard } from '@/components/PromptCard';
 import BuyButton from '@/components/BuyButton';
@@ -8,10 +6,9 @@ import { Avatar, AvatarImage } from '@/components/ui/avatar';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
+import { prisma } from '@/lib/prisma';
 
 export const dynamic = 'force-dynamic';
-
-const prisma = new PrismaClient();
 
 export default async function PromptDetailPage({ params }: { params: { id: string } }) {
   const promptId = Number(params.id);
@@ -79,81 +76,76 @@ export default async function PromptDetailPage({ params }: { params: { id: strin
 
   return (
     <div className="mx-auto max-w-6xl px-4 py-8 space-y-10">
-      <motion.div
-        initial={{ opacity: 0, y: 10 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.25, ease: 'easeOut' }}
-      >
+      <div>
         <Card className="overflow-hidden border-slate-200 bg-white shadow-sm transition hover:shadow-md dark:border-slate-800 dark:bg-slate-900">
           <CardContent className="p-6 md:p-8 space-y-6">
-          <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
-            <div className="space-y-3">
-              <div className="flex items-center gap-3">
-                <Avatar className="h-12 w-12">
-                  {creatorAvatar ? (
-                    <AvatarImage src={creatorAvatar} alt={creatorName} />
-                  ) : (
-                    <div className="flex h-full w-full items-center justify-center bg-slate-100 text-sm font-semibold text-slate-700">
-                      {creatorName.trim().charAt(0).toUpperCase()}
-                    </div>
-                  )}
-                </Avatar>
-                <div className="leading-tight">
-                  <p className="text-sm font-semibold text-slate-900">{creatorName}</p>
-                  <Link
-                    href={`/creator/${prompt.user?.id ?? ''}`}
-                    className="text-xs text-indigo-600 underline-offset-4 hover:underline"
-                  >
-                    View profile
-                  </Link>
+            <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
+              <div className="space-y-3">
+                <div className="flex items-center gap-3">
+                  <Avatar className="h-12 w-12">
+                    {creatorAvatar ? (
+                      <AvatarImage src={creatorAvatar} alt={creatorName} />
+                    ) : (
+                      <div className="flex h-full w-full items-center justify-center bg-slate-100 text-sm font-semibold text-slate-700">
+                        {creatorName.trim().charAt(0).toUpperCase()}
+                      </div>
+                    )}
+                  </Avatar>
+                  <div className="leading-tight">
+                    <p className="text-sm font-semibold text-slate-900">{creatorName}</p>
+                    <Link
+                      href={`/creator/${prompt.user?.id ?? ''}`}
+                      className="text-xs text-indigo-600 underline-offset-4 hover:underline"
+                    >
+                      View profile
+                    </Link>
+                  </div>
                 </div>
+
+                <h1 className="text-3xl font-bold text-slate-900 dark:text-slate-100">
+                  {prompt.title}
+                </h1>
+                {prompt.description && (
+                  <p className="text-sm text-slate-700 dark:text-slate-300">
+                    {prompt.description}
+                  </p>
+                )}
               </div>
 
-              <h1 className="text-3xl font-bold text-slate-900 dark:text-slate-100">
-                {prompt.title}
-              </h1>
-              {prompt.description && (
-                <p className="text-sm text-slate-700 dark:text-slate-300">
-                  {prompt.description}
-                </p>
-              )}
-
+              <div className="flex flex-col items-end gap-3">
+                <Badge className="bg-indigo-600 text-white hover:bg-indigo-700">{priceLabel}</Badge>
+                <BuyButton
+                  promptId={String(prompt.id)}
+                  title={prompt.title}
+                  price={Number(prompt.price ?? 0)}
+                  userId={null}
+                  isCreator={false}
+                  hasPurchased={false}
+                />
+              </div>
             </div>
 
-            <div className="flex flex-col items-end gap-3">
-              <Badge className="bg-indigo-600 text-white hover:bg-indigo-700">{priceLabel}</Badge>
-              <BuyButton
-                promptId={String(prompt.id)}
-                title={prompt.title}
-                price={Number(prompt.price ?? 0)}
-                userId={null}
-                isCreator={false}
-                hasPurchased={false}
-              />
-            </div>
-          </div>
+            {prompt.previewImage && (
+              <div className="overflow-hidden rounded-xl border border-slate-200">
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                  src={prompt.previewImage}
+                  alt={prompt.title}
+                  className="h-64 w-full object-cover"
+                  loading="lazy"
+                />
+              </div>
+            )}
 
-          {prompt.previewImage && (
-            <div className="overflow-hidden rounded-xl border border-slate-200">
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img
-                src={prompt.previewImage}
-                alt={prompt.title}
-                className="h-64 w-full object-cover"
-                loading="lazy"
-              />
+            <div className="rounded-xl border border-slate-200 bg-slate-50 p-5">
+              <p className="text-sm font-semibold text-slate-900">Prompt Preview</p>
+              <p className="mt-2 text-sm text-slate-700">
+                Purchase to unlock the full prompt content instantly after checkout.
+              </p>
             </div>
-          )}
-
-          <div className="rounded-xl border border-slate-200 bg-slate-50 p-5">
-            <p className="text-sm font-semibold text-slate-900">Prompt Preview</p>
-            <p className="mt-2 text-sm text-slate-700">
-              Purchase to unlock the full prompt content instantly after checkout.
-            </p>
-          </div>
           </CardContent>
         </Card>
-      </motion.div>
+      </div>
 
       <div>
         <div className="mb-4 flex items-center justify-between">

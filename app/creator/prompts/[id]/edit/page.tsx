@@ -17,7 +17,7 @@ type EditPageProps = {
 export default async function EditPromptPage({ params }: EditPageProps) {
   const user = await getCurrentUser();
   if (!user) {
-    redirect("/signin");
+    redirect("/auth/login");
   }
 
   const promptId = Number(params.id);
@@ -55,7 +55,7 @@ export default async function EditPromptPage({ params }: EditPageProps) {
 
     const userInner = await getCurrentUser();
     if (!userInner) {
-      redirect("/signin");
+      redirect("/auth/login");
     }
 
     const promptId = Number((formData.get("prompt_id") ?? "").toString());

@@ -10,81 +10,104 @@ import { PromptPreviewImage } from "@/components/PromptPreviewImage";
 
 export const dynamic = "force-dynamic";
 
-type PromptWithRelations = Awaited<ReturnType<typeof prisma.prompt.findMany>>[number];
-
 export default async function HomePage() {
   const currentUser = await getCurrentUser();
 
+  const safeFetch = async <T,>(fn: () => Promise<T>, fallback: T, label: string) => {
+    try {
+      return await fn();
+    } catch (error) {
+      console.error(`[home] ${label} failed`, error);
+      return fallback;
+    }
+  };
+
+  // Basic marketplace stats + featured prompts.
+  // We treat all of this as best-effort so that transient database issues
+  // don't take down the homepage.
   let promptCount = 0;
   let purchasesCount = 0;
-  let creatorGroups: { userId: string | null; _count: { userId: number } }[] = [];
-  let prompts: PromptWithRelations[] = [];
+  let creatorGroups: any[] = [];
+  let prompts: any[] = [];
+  let purchaseGroups: any[] = [];
+  let ratingGroups: any[] = [];
 
-  try {
-    const [promptCountResult, purchasesCountResult, creatorGroupsResult, promptsResult] =
-      await Promise.all([
-        prisma.prompt.count({
-          where: { isPublic: true },
-        }),
-        prisma.purchase.count(),
-        prisma.prompt.groupBy({
-          by: ["userId"],
-          _count: { userId: true },
-          where: { isPublic: true },
-        }),
-        prisma.prompt.findMany({
-          where: { isPublic: true },
-          orderBy: { createdAt: "desc" },
-          take: 12,
-          include: {
-            user: true,
-          },
-        }),
-      ]);
+  promptCount = await safeFetch(
+    () =>
+      prisma.prompt.count({
+        where: { isPublic: true },
+      }),
+    0,
+    "prompt count",
+  );
 
-    promptCount = promptCountResult;
-    purchasesCount = purchasesCountResult;
-    creatorGroups = creatorGroupsResult;
-    prompts = promptsResult;
-  } catch (error) {
-    console.error("[home] Failed to load primary marketplace data", error);
-    // defaults remain
-  }
+  purchasesCount = await safeFetch(() => prisma.purchase.count(), 0, "purchase count");
 
-  let purchaseGroups: { promptId: number; _count: { promptId: number } }[] = [];
-  let ratingGroups: {
-    promptId: number | null;
-    _avg: { rating: number | null };
-    _count: { rating: number };
-  }[] = [];
+  creatorGroups = await safeFetch(
+    () =>
+      prisma.prompt.groupBy({
+        by: ["userId"],
+        where: {
+          isPublic: true,
+        },
+        _count: { userId: true },
+      }),
+    [],
+    "creator groupBy",
+  );
 
-  try {
-    [purchaseGroups, ratingGroups] = await Promise.all([
+  prompts = await safeFetch(
+    () =>
+      prisma.prompt.findMany({
+        where: { isPublic: true },
+        select: {
+          id: true,
+          title: true,
+          description: true,
+          previewImage: true,
+          price: true,
+          tags: true,
+          createdAt: true,
+          isFeatured: true,
+        },
+        take: 150, // cap the work on the homepage to avoid hammering the pool
+      }),
+    [],
+    "prompts",
+  );
+
+  purchaseGroups = await safeFetch(
+    () =>
       prisma.purchase.groupBy({
         by: ["promptId"],
         _count: { promptId: true },
       }),
+    [],
+    "purchase groupBy",
+  );
+
+  ratingGroups = await safeFetch(
+    () =>
       prisma.promptRating.groupBy({
         by: ["promptId"],
         _avg: { rating: true },
         _count: { rating: true },
       }),
-    ]);
-  } catch (error) {
-    console.error("[home] Failed to load purchase/rating aggregates", error);
-  }
+    [],
+    "rating groupBy",
+  );
 
   const creatorCount = creatorGroups.length;
 
-  const salesByPromptId: Map<number, number> = new Map();
+  const salesByPromptId: Map<string, number> = new Map();
   for (const row of purchaseGroups) {
-    salesByPromptId.set(row.promptId, row._count.promptId);
+    salesByPromptId.set(String(row.promptId), row._count.promptId);
   }
 
-  const ratingStatsByPromptId: Map<number, { avg: number | null; count: number }> = new Map();
+  const ratingStatsByPromptId: Map<string, { avg: number | null; count: number }> = new Map();
   for (const row of ratingGroups) {
-    if (row.promptId === null) continue;
-    ratingStatsByPromptId.set(row.promptId, {
+    if (!row.promptId) continue;
+    ratingStatsByPromptId.set(String(row.promptId), {
       avg: row._avg.rating ?? null,
       count: row._count.rating,
     });
@@ -92,8 +115,9 @@ export default async function HomePage() {
 
   // Build a "featured" list by scoring prompts based on sales + rating + recency
   const scoredPrompts = prompts.map((p) => {
-    const sales = salesByPromptId.get(p.id) ?? 0;
-    const stats = ratingStatsByPromptId.get(p.id);
+    const key = String(p.id);
+    const sales = salesByPromptId.get(key) ?? 0;
+    const stats = ratingStatsByPromptId.get(key);
     const avgRating = stats?.avg ?? 0;
     const ratingCount = stats?.count ?? 0;
 
@@ -145,7 +169,7 @@ export default async function HomePage() {
               <Link href="/prompts">Browse prompts</Link>
             </Button>
             <Button asChild variant="outline" size="sm">
-              <Link href={currentUser ? "/creator/prompts" : "/signin"}>
+              <Link href={currentUser ? "/creator/prompts" : "/auth/login"}>
                 Become a creator
               </Link>
             </Button>
@@ -281,7 +305,7 @@ export default async function HomePage() {
                           {priceDisplay}
                         </Badge>
                         {Array.isArray(p.tags) &&
-                          p.tags.slice(0, 2).map((tag) => (
+                          p.tags.slice(0, 2).map((tag: string) => (
                             <Badge
                               key={tag}
                               variant="secondary"
@@ -365,7 +389,7 @@ export default async function HomePage() {
               variant="outline"
               className="mt-2"
             >
-              <Link href={currentUser ? "/creator/prompts" : "/signin"}>
+              <Link href={currentUser ? "/creator/prompts" : "/auth/login"}>
                 Open creator dashboard
               </Link>
             </Button>

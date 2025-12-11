@@ -2,7 +2,7 @@ import { cookies } from 'next/headers';
 import { NextResponse } from 'next/server';
 import Stripe from 'stripe';
 import { createClient } from '@supabase/supabase-js';
-import { PrismaClient } from '@prisma/client';
+import { prisma } from '@/lib/prisma';
 
 export const runtime = 'nodejs';
 
@@ -12,7 +12,6 @@ const stripeSecretKey = process.env.STRIPE_SECRET_KEY?.trim();
 const siteUrl = process.env.NEXT_PUBLIC_SITE_URL || 'http://localhost:3000';
 const projectRef = supabaseUrl?.replace(/^https?:\/\//, '').split('.')[0];
 
-const prisma = new PrismaClient();
 const stripe =
   stripeSecretKey && new Stripe(stripeSecretKey, { apiVersion: '2024-11-15' as any });
 

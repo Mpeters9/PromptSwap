@@ -10,7 +10,7 @@ export default async function ChatLayout({
   const user = await getCurrentUser();
 
   if (!user) {
-    redirect("/signin");
+    redirect("/auth/login");
   }
 
   return <>{children}</>;

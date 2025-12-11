@@ -13,7 +13,7 @@ import { Label } from "@/components/ui/label";
 export default async function NewPromptPage() {
   const user = await getCurrentUser();
   if (!user) {
-    redirect("/signin");
+    redirect("/auth/login");
   }
 
   async function createPrompt(formData: FormData) {
@@ -21,7 +21,7 @@ export default async function NewPromptPage() {
 
     const userInner = await getCurrentUser();
     if (!userInner) {
-      redirect("/signin");
+      redirect("/auth/login");
     }
 
     const title = (formData.get("title") ?? "").toString().trim();

@@ -12,7 +12,7 @@ export default async function PurchasesPage() {
   const user = await getCurrentUser();
 
   if (!user) {
-    redirect("/signin");
+    redirect("/auth/login");
   }
 
   const purchases = await prisma.purchase.findMany({

@@ -27,7 +27,7 @@ export default async function CreatorAnalyticsPage() {
   const user = await getCurrentUser();
 
   if (!user) {
-    redirect("/signin");
+    redirect("/auth/login");
   }
 
   const [purchases, views, prompts] = await Promise.all([

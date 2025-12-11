@@ -1,6 +1,5 @@
-import { PrismaClient, type Prisma } from '@prisma/client';
+import type { Prisma } from '@prisma/client';
 import Link from 'next/link';
-import { motion } from 'framer-motion';
 
 import { PromptCard } from '@/components/PromptCard';
 import { Badge } from '@/components/ui/badge';
@@ -15,6 +14,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
+import { prisma } from '@/lib/prisma';
 
 export const dynamic = 'force-dynamic';
 export const metadata = buildMetadata({
@@ -23,16 +23,15 @@ export const metadata = buildMetadata({
   image: `${process.env.NEXT_PUBLIC_SITE_URL || 'http://localhost:3000'}/api/og`,
 });
 
-const prisma = new PrismaClient();
-
 type MarketplaceProps = {
-  searchParams?: { search?: string; category?: string; sort?: string };
+  searchParams?: Promise<{ search?: string; category?: string; sort?: string }>;
 };
 
 export default async function MarketplacePage({ searchParams }: MarketplaceProps) {
-  const search = searchParams?.search?.toString().trim() ?? '';
-  const category = searchParams?.category?.toString().trim() ?? '';
-  const sort = searchParams?.sort?.toString().trim() ?? 'newest';
+  const resolvedParams = await searchParams;
+  const search = resolvedParams?.search?.toString().trim() ?? '';
+  const category = resolvedParams?.category?.toString().trim() ?? '';
+  const sort = resolvedParams?.sort?.toString().trim() ?? 'newest';
 
   const orderBy: Prisma.PromptOrderByWithRelationInput =
     sort === 'priceAsc'
@@ -86,23 +85,14 @@ export default async function MarketplacePage({ searchParams }: MarketplaceProps
 
   return (
     <div className="mx-auto max-w-6xl px-4 py-8">
-      <motion.div
-        className="mb-6 space-y-2 text-center md:text-left"
-        initial={{ opacity: 0, y: 8 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.25, ease: 'easeOut' }}
-      >
+      <div className="mb-6 space-y-2 text-center md:text-left">
         <h1 className="text-3xl font-semibold text-slate-900 dark:text-slate-100">Marketplace</h1>
         <p className="text-sm text-slate-600 dark:text-slate-300">
           Browse, filter, and purchase quality prompts.
         </p>
-      </motion.div>
+      </div>
 
-      <motion.div
-        initial={{ opacity: 0, y: 6 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.2, ease: 'easeOut' }}
-      >
+      <div>
         <Card className="border-slate-200 bg-white shadow-sm dark:border-slate-800 dark:bg-slate-900">
           <CardContent className="p-4 md:p-6">
             <form
@@ -157,7 +147,7 @@ export default async function MarketplacePage({ searchParams }: MarketplaceProps
             </form>
           </CardContent>
         </Card>
-      </motion.div>
+      </div>
 
       {prompts.length === 0 ? (
         <div className="rounded-xl border border-slate-200 bg-white p-6 text-center shadow-sm dark:border-slate-800 dark:bg-slate-900">

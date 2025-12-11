@@ -52,17 +52,22 @@ export async function createChatSession(
 export async function listChatSessions(
   userId?: string | null
 ): Promise<ChatSessionDTO[]> {
-  const sessions = await prisma.chatSession.findMany({
-    where: userId ? { userId } : undefined,
-    orderBy: { createdAt: "desc" },
-  });
+  try {
+    const sessions = await prisma.chatSession.findMany({
+      where: userId ? { userId } : undefined,
+      orderBy: { createdAt: "desc" },
+    });
 
-  return sessions.map((s) => ({
-    id: s.id,
-    userId: s.userId ?? null,
-    title: s.title ?? null,
-    createdAt: s.createdAt ?? new Date(),
-  }));
+    return sessions.map((s) => ({
+      id: s.id,
+      userId: s.userId ?? null,
+      title: s.title ?? null,
+      createdAt: s.createdAt ?? new Date(),
+    }));
+  } catch (error) {
+    console.error("[dashboard] Failed to list chat sessions", error);
+    return [];
+  }
 }
 
 /**
