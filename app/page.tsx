@@ -14,7 +14,7 @@ export default async function HomePage() {
   const currentUser = await getCurrentUser();
 
   // Basic marketplace stats
-  const [promptCount, purchasesCount, creatorGroups, prompts, purchaseGroups, ratingGroups] =
+  const [promptCount, purchasesCount, creatorGroups, prompts, purchaseGroups] =
     await Promise.all([
       prisma.prompt.count({
         where: { isPublic: true },
@@ -44,31 +44,16 @@ export default async function HomePage() {
         by: ["promptId"],
         _count: { promptId: true },
       }),
-      prisma.promptRating.groupBy({
-        by: ["promptId"],
-        _avg: { rating: true },
-        _count: { rating: true },
-      }),
     ]);
 
   const creatorCount = creatorGroups.length;
 
-  const salesByPromptId = new Map<string, number>();
+  const salesByPromptId: Map<number, number> = new Map();
   for (const row of purchaseGroups) {
     salesByPromptId.set(row.promptId, row._count.promptId);
   }
 
-  const ratingStatsByPromptId = new Map<
-    string,
-    { avg: number | null; count: number }
-  >();
-  for (const row of ratingGroups) {
-    if (!row.promptId) continue;
-    ratingStatsByPromptId.set(row.promptId, {
-      avg: row._avg.rating ?? null,
-      count: row._count.rating,
-    });
-  }
+  const ratingStatsByPromptId: Map<number, { avg: number | null; count: number }> = new Map();
 
   // Build a "featured" list by scoring prompts based on sales + rating + recency
   const scoredPrompts = prompts.map((p) => {

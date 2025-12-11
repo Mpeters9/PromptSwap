@@ -11,7 +11,7 @@ import { getCurrentUser } from '@/lib/supabase-server';
 import ClientSections, { ActionPanel } from './ClientSections';
 
 export type Prompt = {
-  id: string;
+  id: number;
   user_id: string | null;
   title: string;
   description: string | null;
@@ -40,7 +40,7 @@ export type PromptVersion = {
 };
 
 type AlsoBoughtPrompt = {
-  id: string;
+  id: number;
   title: string;
   previewImage: string | null;
   price: number | null;
@@ -55,6 +55,10 @@ export async function startTestSession(formData: FormData) {
   if (!promptId) {
     throw new Error('Missing prompt_id');
   }
+  const promptIdNum = Number(promptId);
+  if (!Number.isInteger(promptIdNum)) {
+    throw new Error('Invalid prompt_id');
+  }
 
   const user = await getCurrentUser();
   if (!user) {
@@ -63,7 +67,7 @@ export async function startTestSession(formData: FormData) {
 
   // Fetch the prompt text from Prisma
   const prompt = await prisma.prompt.findUnique({
-    where: { id: promptId },
+    where: { id: promptIdNum },
     select: {
       id: true,
       title: true,
@@ -141,9 +145,14 @@ export async function ratePrompt(formData: FormData) {
     throw new Error('Rating must be between 1 and 5.');
   }
 
+  const promptIdNum = Number(promptId);
+  if (!Number.isInteger(promptIdNum)) {
+    throw new Error('Invalid prompt id.');
+  }
+
   // Check that the prompt exists
   const prompt = await prisma.prompt.findUnique({
-    where: { id: promptId },
+    where: { id: promptIdNum },
     select: {
       id: true,
       userId: true,
@@ -175,7 +184,7 @@ export async function ratePrompt(formData: FormData) {
   // Upsert rating: one per user per prompt.
   const existing = await prisma.promptRating.findFirst({
     where: {
-      promptId,
+      promptId: promptIdNum,
       userId: user.id,
     },
     select: { id: true },
@@ -192,7 +201,7 @@ export async function ratePrompt(formData: FormData) {
   } else {
     await prisma.promptRating.create({
       data: {
-        promptId,
+        promptId: promptIdNum,
         userId: user.id,
         rating: ratingValue,
         comment: comment || null,
@@ -201,10 +210,10 @@ export async function ratePrompt(formData: FormData) {
   }
 
   // Simple redirect back to refresh the page and stats.
-  redirect(`/prompts/${promptId}`);
+  redirect(`/prompts/${promptIdNum}`);
 }
 
-async function getPrompt(id: string): Promise<Prompt | null> {
+async function getPrompt(id: number): Promise<Prompt | null> {
   const prompt = await prisma.prompt.findUnique({
     where: { id },
     select: {
@@ -237,7 +246,7 @@ async function getPrompt(id: string): Promise<Prompt | null> {
   };
 }
 
-async function getRatings(promptId: string): Promise<Rating[]> {
+async function getRatings(promptId: number): Promise<Rating[]> {
   const rows = await prisma.promptRating.findMany({
     where: { promptId },
     orderBy: { createdAt: 'desc' },
@@ -257,7 +266,7 @@ async function getRatings(promptId: string): Promise<Rating[]> {
   }));
 }
 
-async function getSalesCount(promptId: string): Promise<number> {
+async function getSalesCount(promptId: number): Promise<number> {
   const count = await prisma.purchase.count({
     where: { promptId },
   });
@@ -265,31 +274,12 @@ async function getSalesCount(promptId: string): Promise<number> {
   return count;
 }
 
-async function getVersions(promptId: string): Promise<PromptVersion[]> {
-  const rows = await prisma.promptVersion.findMany({
-    where: { promptId },
-    orderBy: { createdAt: 'desc' },
-    select: {
-      id: true,
-      promptId: true,
-      userId: true,
-      content: true,
-      notes: true,
-      createdAt: true,
-    },
-  });
-
-  return rows.map((row) => ({
-    id: row.id,
-    prompt_id: row.promptId!,
-    user_id: row.userId,
-    content: row.content,
-    notes: row.notes,
-    created_at: row.createdAt?.toISOString() ?? new Date().toISOString(),
-  }));
+async function getVersions(_promptId: string): Promise<PromptVersion[]> {
+  // Version history currently unavailable.
+  return [];
 }
 
-async function getAlsoBoughtPrompts(promptId: string): Promise<AlsoBoughtPrompt[]> {
+async function getAlsoBoughtPrompts(promptId: number): Promise<AlsoBoughtPrompt[]> {
   // 1) Find all buyers of this prompt
   const buyers = await prisma.purchase.findMany({
     where: { promptId },
@@ -339,7 +329,7 @@ async function getAlsoBoughtPrompts(promptId: string): Promise<AlsoBoughtPrompt[
     },
   });
 
-  const countByPromptId = new Map<string, number>();
+  const countByPromptId = new Map<number, number>();
   for (const row of coPurchases) {
     countByPromptId.set(row.promptId, row._count.promptId);
   }
@@ -359,7 +349,7 @@ async function getAlsoBoughtPrompts(promptId: string): Promise<AlsoBoughtPrompt[
   return results.slice(0, 4);
 }
 
-async function getHasPurchased(promptId: string, buyerId: string | undefined): Promise<boolean> {
+async function getHasPurchased(promptId: number, buyerId: string | undefined): Promise<boolean> {
   if (!buyerId) return false;
 
   const purchase = await prisma.purchase.findFirst({
@@ -373,13 +363,13 @@ async function getHasPurchased(promptId: string, buyerId: string | undefined): P
   return !!purchase;
 }
 
-async function logPromptView(promptId: string, viewerId?: string) {
+async function logPromptView(promptId: number, viewerId?: string) {
   // Fire-and-forget-ish: if this throws, we don't want to break the page.
   try {
     await prisma.promptView.create({
       data: {
         promptId,
-        viewerId: viewerId ?? null,
+        userId: viewerId ?? null,
       },
     });
   } catch (err) {
@@ -388,13 +378,16 @@ async function logPromptView(promptId: string, viewerId?: string) {
 }
 
 export default async function PromptDetailPage({ params }: { params: { id: string } }) {
-  const { id } = params;
+  const promptId = Number(params.id);
+  if (!Number.isInteger(promptId)) {
+    notFound();
+  }
 
   const [prompt, ratings, salesCount, versions, currentUser] = await Promise.all([
-    getPrompt(id),
-    getRatings(id),
-    getSalesCount(id),
-    getVersions(id),
+    getPrompt(promptId),
+    getRatings(promptId),
+    getSalesCount(promptId),
+    getVersions(String(promptId)),
     getCurrentUser(),
   ]);
 
@@ -423,7 +416,7 @@ export default async function PromptDetailPage({ params }: { params: { id: strin
 
   const relatedPrompts = await prisma.prompt.findMany({
     where: {
-      id: { not: id },
+      id: { not: prompt.id },
       isPublic: true,
       tags: {
         hasSome: prompt.tags ?? [],
@@ -477,11 +470,11 @@ export default async function PromptDetailPage({ params }: { params: { id: strin
                       <span className="text-xs text-amber-600">({ratings.length})</span>
                     </div>
                   )}
-                  <div className="flex items-center gap-3 rounded-full bg-indigo-50 px-3 py-1 text-sm font-semibold text-indigo-700">
+                    <div className="flex items-center gap-3 rounded-full bg-indigo-50 px-3 py-1 text-sm font-semibold text-indigo-700">
                     {price > 0 ? `$${price.toFixed(2)}` : 'Free'}
                     {price > 0 && (
                       <BuyButton
-                        promptId={prompt.id}
+                        promptId={String(prompt.id)}
                         title={prompt.title}
                         price={price}
                         userId={currentUserId}

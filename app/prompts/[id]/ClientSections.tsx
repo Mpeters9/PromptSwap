@@ -136,7 +136,7 @@ export function ActionPanel({ prompt, salesCount, averageRating, ratingCount }: 
 }
 
 type RatingFormProps = {
-  promptId: string;
+  promptId: number;
   existingRatings: Rating[];
   onNewRating: Dispatch<SetStateAction<Rating[]>>;
 };

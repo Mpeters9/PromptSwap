@@ -59,16 +59,6 @@ export default async function NewPromptPage() {
       },
     });
 
-    // Optionally create an initial version record
-    await prisma.promptVersion.create({
-      data: {
-        promptId: prompt.id,
-        userId: userInner.id,
-        content: promptText,
-        notes: "Initial version",
-      },
-    });
-
     revalidatePath("/creator/prompts");
     revalidatePath("/prompts");
     redirect(`/creator/prompts`);

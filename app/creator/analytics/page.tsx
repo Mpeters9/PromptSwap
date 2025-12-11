@@ -10,7 +10,7 @@ import Link from "next/link";
 import { Button } from "@/components/ui/button";
 
 type RevenueByPrompt = {
-  promptId: string;
+  promptId: number;
   title: string;
   sales: number;
   revenue: number;
@@ -67,20 +67,22 @@ export default async function CreatorAnalyticsPage() {
   const totalSales = purchases.length;
 
   let totalRevenue = 0;
-  const revenueByPrompt = new Map<string, RevenueByPrompt>();
+  const revenueByPrompt = new Map<number, RevenueByPrompt>();
   const revenueByMonth = new Map<string, number>();
-  const viewsByPrompt = new Map<string, number>();
+  const viewsByPrompt = new Map<number, number>();
 
   // Aggregate views per prompt
   for (const v of views) {
-    const prev = viewsByPrompt.get(v.promptId) ?? 0;
-    viewsByPrompt.set(v.promptId, prev + 1);
+    const promptKey = v.promptId;
+    const prev = viewsByPrompt.get(promptKey) ?? 0;
+    viewsByPrompt.set(promptKey, prev + 1);
   }
 
   // Prompt meta map
-  const promptMeta = new Map<string, { title: string; price: number }>();
+  const promptMeta = new Map<number, { title: string; price: number }>();
   for (const p of prompts) {
-    promptMeta.set(p.id, {
+    const promptKey = p.id;
+    promptMeta.set(promptKey, {
       title: p.title || "Untitled prompt",
       price: p.price != null ? Number(p.price) : 0,
     });
@@ -90,6 +92,7 @@ export default async function CreatorAnalyticsPage() {
     const prompt = p.prompt;
     if (!prompt) continue;
 
+    const promptKey = prompt.id;
     const price =
       (p as any).price != null
         ? Number((p as any).price)
@@ -100,8 +103,8 @@ export default async function CreatorAnalyticsPage() {
     totalRevenue += price;
 
     // Per-prompt stats
-    const existing = revenueByPrompt.get(prompt.id) ?? {
-      promptId: prompt.id,
+    const existing = revenueByPrompt.get(promptKey) ?? {
+      promptId: promptKey,
       title: prompt.title || "Untitled prompt",
       sales: 0,
       revenue: 0,
@@ -109,7 +112,7 @@ export default async function CreatorAnalyticsPage() {
 
     existing.sales += 1;
     existing.revenue += price;
-    revenueByPrompt.set(prompt.id, existing);
+    revenueByPrompt.set(promptKey, existing);
 
     // Per-month stats
     const createdAt = p.createdAt ?? new Date();

@@ -20,8 +20,13 @@ export default async function EditPromptPage({ params }: EditPageProps) {
     redirect("/signin");
   }
 
+  const promptId = Number(params.id);
+  if (!Number.isInteger(promptId)) {
+    notFound();
+  }
+
   const prompt = await prisma.prompt.findUnique({
-    where: { id: params.id },
+    where: { id: promptId },
     select: {
       id: true,
       userId: true,
@@ -53,7 +58,10 @@ export default async function EditPromptPage({ params }: EditPageProps) {
       redirect("/signin");
     }
 
-    const promptId = (formData.get("prompt_id") ?? "").toString();
+    const promptId = Number((formData.get("prompt_id") ?? "").toString());
+    if (!Number.isInteger(promptId)) {
+      notFound();
+    }
     const existing = await prisma.prompt.findUnique({
       where: { id: promptId },
     });
@@ -100,16 +108,6 @@ export default async function EditPromptPage({ params }: EditPageProps) {
         previewImage: previewImage || null,
         isPublic,
         isFeatured,
-      },
-    });
-
-    // Optional: create a new version snapshot when editing
-    await prisma.promptVersion.create({
-      data: {
-        promptId,
-        userId: userInner.id,
-        content: promptText,
-        notes: "Edited prompt",
       },
     });
 

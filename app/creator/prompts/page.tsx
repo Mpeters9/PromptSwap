@@ -35,10 +35,10 @@ export default async function CreatorPromptsPage() {
     }),
   ]);
 
-  const salesCountByPromptId = new Map<string, number>();
-  const viewsCountByPromptId = new Map<string, number>();
+  const salesCountByPromptId = new Map<number, number>();
+  const viewsCountByPromptId = new Map<number, number>();
   let totalSales = 0;
-  let topPromptId: string | null = null;
+  let topPromptId: number | null = null;
   let topPromptSales = 0;
 
   for (const row of salesGroups) {

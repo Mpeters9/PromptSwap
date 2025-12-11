@@ -14,8 +14,24 @@ export const dynamic = 'force-dynamic';
 const prisma = new PrismaClient();
 
 export default async function PromptDetailPage({ params }: { params: { id: string } }) {
+  const promptId = Number(params.id);
+  if (!Number.isInteger(promptId)) {
+    return (
+      <div className="mx-auto max-w-6xl px-4 py-8">
+        <Card>
+          <CardContent className="p-8 text-center">
+            <h1 className="text-2xl font-semibold text-slate-900">Prompt not found.</h1>
+            <Button variant="link" asChild className="mt-3">
+              <Link href="/marketplace">Back to marketplace</Link>
+            </Button>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
+
   const prompt = await prisma.prompt.findUnique({
-    where: { id: params.id },
+    where: { id: promptId },
     select: {
       id: true,
       title: true,
@@ -107,7 +123,7 @@ export default async function PromptDetailPage({ params }: { params: { id: strin
             <div className="flex flex-col items-end gap-3">
               <Badge className="bg-indigo-600 text-white hover:bg-indigo-700">{priceLabel}</Badge>
               <BuyButton
-                promptId={prompt.id}
+                promptId={String(prompt.id)}
                 title={prompt.title}
                 price={Number(prompt.price ?? 0)}
                 userId={null}
@@ -153,7 +169,7 @@ export default async function PromptDetailPage({ params }: { params: { id: strin
             {moreFromCreator.map((item) => (
               <PromptCard
                 key={item.id}
-                id={item.id}
+                id={String(item.id)}
                 title={item.title}
                 description={item.description ?? ''}
                 price={Number(item.price ?? 0)}

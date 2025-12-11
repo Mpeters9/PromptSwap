@@ -16,8 +16,8 @@ export async function POST(
   }
 
   const { id } = await context.params;
-  const promptId = id;
-  if (!promptId) {
+  const promptId = Number(id);
+  if (!Number.isInteger(promptId)) {
     return NextResponse.json({ error: 'invalid_prompt' }, { status: 400 });
   }
 

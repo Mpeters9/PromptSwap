@@ -111,7 +111,7 @@ export default async function PromptsIndexPage({
               promptId: true,
             },
           })
-        : Promise.resolve([] as { promptId: string }[]),
+        : Promise.resolve([] as { promptId: number }[]),
 
       prisma.promptRating.groupBy({
         by: ["promptId"],
@@ -121,19 +121,19 @@ export default async function PromptsIndexPage({
     ]);
 
   // Maps for quick lookup: sales & ownership
-  const salesByPromptId = new Map<string, number>();
+  const salesByPromptId = new Map<number, number>();
   for (const row of purchaseGroups) {
     salesByPromptId.set(row.promptId, row._count.promptId);
   }
 
-  const ownedPromptIds = new Set<string>();
+  const ownedPromptIds = new Set<number>();
   for (const purchase of userPurchases) {
     ownedPromptIds.add(purchase.promptId);
   }
 
   // Rating stats map
   const ratingStatsByPromptId = new Map<
-    string,
+    number,
     { avg: number | null; count: number }
   >();
   for (const row of ratingGroups) {
