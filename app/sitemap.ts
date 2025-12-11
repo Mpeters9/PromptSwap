@@ -1,5 +1,4 @@
 import type { MetadataRoute } from "next";
-import { prisma } from "@/lib/prisma";
 
 export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
   const siteUrl =
@@ -17,14 +16,20 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
     lastModified: new Date(),
   }));
 
-  const prompts = await prisma.prompt.findMany({
-    select: { id: true },
-  });
+  try {
+    const { prisma } = await import("@/lib/prisma");
+    const prompts = await prisma.prompt.findMany({
+      select: { id: true },
+    });
 
-  const promptRoutes: MetadataRoute.Sitemap = prompts.map((p) => ({
-    url: `${siteUrl}/prompts/${p.id}`,
-    lastModified: new Date(),
-  }));
+    const promptRoutes: MetadataRoute.Sitemap = prompts.map((p) => ({
+      url: `${siteUrl}/prompts/${p.id}`,
+      lastModified: new Date(),
+    }));
 
-  return [...staticRoutes, ...promptRoutes];
+    return [...staticRoutes, ...promptRoutes];
+  } catch (err) {
+    console.error("[sitemap] failed to fetch prompts; returning static routes", err);
+    return staticRoutes;
+  }
 }
