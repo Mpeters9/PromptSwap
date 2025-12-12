@@ -43,18 +43,17 @@ export async function createChatSession(
   };
 }
 
-/**
- * List chat sessions for a given user.
- * For now userId is optional:
- * - If provided, filter by userId.
- * - If omitted, return all sessions (useful during early dev).
- */
+// List chat sessions for a given user. If no user is present, return an empty list.
 export async function listChatSessions(
   userId?: string | null
 ): Promise<ChatSessionDTO[]> {
+  if (!userId) {
+    return [];
+  }
+
   try {
     const sessions = await prisma.chatSession.findMany({
-      where: userId ? { userId } : undefined,
+      where: { userId },
       orderBy: { createdAt: "desc" },
     });
 
@@ -65,7 +64,7 @@ export async function listChatSessions(
       createdAt: s.createdAt ?? new Date(),
     }));
   } catch (error) {
-    console.error("[dashboard] Failed to list chat sessions", error);
+    console.error("[chat] Failed to list chat sessions", error);
     return [];
   }
 }

@@ -1,401 +1,183 @@
-// app/page.tsx
 import Link from "next/link";
 
 import { prisma } from "@/lib/prisma";
 import { getCurrentUser } from "@/lib/supabase-server";
-import { Button } from "@/components/ui/button";
-import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
-import { PromptPreviewImage } from "@/components/PromptPreviewImage";
 
 export const dynamic = "force-dynamic";
 
 export default async function HomePage() {
   const currentUser = await getCurrentUser();
 
-  const safeFetch = async <T,>(fn: () => Promise<T>, fallback: T, label: string) => {
-    try {
-      return await fn();
-    } catch (error) {
-      console.error(`[home] ${label} failed`, error);
-      return fallback;
-    }
-  };
-
-  // Basic marketplace stats + featured prompts.
-  // We treat all of this as best-effort so that transient database issues
-  // don't take down the homepage.
   let promptCount = 0;
-  let purchasesCount = 0;
-  let creatorGroups: any[] = [];
-  let prompts: any[] = [];
-  let purchaseGroups: any[] = [];
-  let ratingGroups: any[] = [];
+  let featuredPrompts: any[] = [];
 
-  promptCount = await safeFetch(
-    () =>
-      prisma.prompt.count({
-        where: { isPublic: true },
-      }),
-    0,
-    "prompt count",
-  );
-
-  purchasesCount = await safeFetch(() => prisma.purchase.count(), 0, "purchase count");
-
-  creatorGroups = await safeFetch(
-    () =>
-      prisma.prompt.groupBy({
-        by: ["userId"],
-        where: {
-          isPublic: true,
-        },
-        _count: { userId: true },
-      }),
-    [],
-    "creator groupBy",
-  );
-
-  prompts = await safeFetch(
-    () =>
-      prisma.prompt.findMany({
-        where: { isPublic: true },
-        select: {
-          id: true,
-          title: true,
-          description: true,
-          previewImage: true,
-          price: true,
-          tags: true,
-          createdAt: true,
-          isFeatured: true,
-        },
-        take: 150, // cap the work on the homepage to avoid hammering the pool
-      }),
-    [],
-    "prompts",
-  );
-
-  purchaseGroups = await safeFetch(
-    () =>
-      prisma.purchase.groupBy({
-        by: ["promptId"],
-        _count: { promptId: true },
-      }),
-    [],
-    "purchase groupBy",
-  );
-
-  ratingGroups = await safeFetch(
-    () =>
-      prisma.promptRating.groupBy({
-        by: ["promptId"],
-        _avg: { rating: true },
-        _count: { rating: true },
-      }),
-    [],
-    "rating groupBy",
-  );
-
-  const creatorCount = creatorGroups.length;
-
-  const salesByPromptId: Map<string, number> = new Map();
-  for (const row of purchaseGroups) {
-    salesByPromptId.set(String(row.promptId), row._count.promptId);
-  }
-
-  const ratingStatsByPromptId: Map<string, { avg: number | null; count: number }> = new Map();
-  for (const row of ratingGroups) {
-    if (!row.promptId) continue;
-    ratingStatsByPromptId.set(String(row.promptId), {
-      avg: row._avg.rating ?? null,
-      count: row._count.rating,
+  try {
+    const promptCountResult = await prisma.prompt.count({
+      where: { isPublic: true },
     });
+
+    promptCount = promptCountResult;
+
+    featuredPrompts = await prisma.prompt.findMany({
+      where: { isPublic: true },
+      orderBy: { createdAt: "desc" },
+      take: 12,
+      select: {
+        id: true,
+        title: true,
+        description: true,
+        previewImage: true,
+        price: true,
+        tags: true,
+        createdAt: true,
+        isFeatured: true,
+      },
+    });
+  } catch (error) {
+    console.error("[home] Failed to load basic prompt data", error);
   }
 
-  // Build a "featured" list by scoring prompts based on sales + rating + recency
-  const scoredPrompts = prompts.map((p) => {
-    const key = String(p.id);
-    const sales = salesByPromptId.get(key) ?? 0;
-    const stats = ratingStatsByPromptId.get(key);
-    const avgRating = stats?.avg ?? 0;
-    const ratingCount = stats?.count ?? 0;
-
-    // Very simple heuristic score:
-    //   sales weight + rating weight + mild recency boost
-    const salesScore = sales * 3;
-    const ratingScore = avgRating * Math.log10(ratingCount + 1);
-    const recencyScore =
-      (Date.now() - (p.createdAt?.getTime?.() ?? new Date().getTime())) /
-      (1000 * 60 * 60 * 24 * 30); // months since created
-
-    const recencyWeight = recencyScore > 0 ? Math.max(0, 3 - recencyScore) : 3;
-
-    const score = salesScore + ratingScore + recencyWeight;
-
-    return {
-      ...p,
-      sales,
-      avgRating,
-      ratingCount,
-      score,
-    };
-  });
-
-  const manuallyFeatured = scoredPrompts.filter((p) => p.isFeatured);
-  const autoCandidates = scoredPrompts.filter((p) => !p.isFeatured);
-
-  autoCandidates.sort((a, b) => b.score - a.score);
-
-  // Take all manually featured first, then fill slots up to 6 with best auto candidates
-  const combined = [...manuallyFeatured, ...autoCandidates];
-  const featuredPrompts = combined.slice(0, 6);
+  const primaryActionHref = currentUser ? "/dashboard" : "/auth/login";
+  const primaryActionLabel = currentUser ? "Go to dashboard" : "Sign in to start";
 
   return (
-    <main className="mx-auto flex w-full max-w-5xl flex-col gap-10 px-4 py-10">
-      {/* Hero */}
-      <section className="flex flex-col gap-6 md:flex-row md:items-center md:justify-between">
-        <div className="max-w-xl space-y-4">
-          <h1 className="text-3xl font-semibold tracking-tight sm:text-4xl">
-            The marketplace for high-converting AI prompts.
+    <main className="min-h-screen bg-gradient-to-b from-background to-muted">
+      <div className="mx-auto flex w-full max-w-6xl flex-col gap-12 px-4 py-16 sm:py-20">
+        <section className="rounded-3xl border border-border/60 bg-card p-10 shadow-2xl">
+          <p className="text-xs uppercase tracking-[0.3em] text-muted-foreground">PromptSwap</p>
+          <h1 className="mt-4 text-4xl font-bold leading-tight text-foreground sm:text-5xl">
+            PromptSwap — prompts that actually work
           </h1>
-          <p className="text-sm text-muted-foreground sm:text-base">
-            PromptSwap lets creators sell battle-tested prompts, and lets buyers
-            instantly discover, purchase, and test them in a built-in chat
-            playground.
+          <p className="mt-4 max-w-3xl text-lg text-muted-foreground">
+            Buy, sell, and unlock AI workflow recipes that ship fast. Instant access after purchase,
+            one-time pricing, and creator payouts wired through Stripe.
           </p>
-          <div className="flex flex-wrap items-center gap-3">
-            <Button asChild size="sm">
-              <Link href="/prompts">Browse prompts</Link>
-            </Button>
-            <Button asChild variant="outline" size="sm">
-              <Link href={currentUser ? "/creator/prompts" : "/auth/login"}>
-                Become a creator
-              </Link>
-            </Button>
-            <span className="text-xs text-muted-foreground">
-              No paid OpenAI key required in test mode.
-            </span>
-          </div>
-        </div>
-
-        <div className="mt-4 w-full max-w-sm md:mt-0">
-          <Card className="border-primary/20 shadow-sm">
-            <CardHeader className="pb-2">
-              <CardTitle className="text-sm font-semibold">
-                See how a prompt sells
-              </CardTitle>
-              <CardDescription className="text-xs">
-                Real-time stats for creators: revenue, sales, views, conversion.
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-2 text-xs">
-              <div className="flex justify-between">
-                <span className="text-muted-foreground">Launch funnel wizard</span>
-                <span className="font-medium">$1,243.00</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-muted-foreground">Monthly sales</span>
-                <span className="font-medium">82</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-muted-foreground">View → purchase</span>
-                <span className="font-medium">7.4%</span>
-              </div>
-              <p className="mt-2 text-[11px] text-muted-foreground">
-                Analytics are available out of the box for every creator.
-              </p>
-            </CardContent>
-          </Card>
-        </div>
-      </section>
-
-      {/* Stats row */}
-      <section className="grid gap-4 md:grid-cols-3">
-        <Card>
-          <CardHeader className="space-y-1 py-3">
-            <CardTitle className="text-xs font-medium text-muted-foreground">
-              Public prompts
-            </CardTitle>
-            <CardDescription className="text-2xl font-semibold text-foreground">
-              {promptCount}
-            </CardDescription>
-          </CardHeader>
-        </Card>
-        <Card>
-          <CardHeader className="space-y-1 py-3">
-            <CardTitle className="text-xs font-medium text-muted-foreground">
-              Active creators
-            </CardTitle>
-            <CardDescription className="text-2xl font-semibold text-foreground">
-              {creatorCount}
-            </CardDescription>
-          </CardHeader>
-        </Card>
-        <Card>
-          <CardHeader className="space-y-1 py-3">
-            <CardTitle className="text-xs font-medium text-muted-foreground">
-              Total purchases
-            </CardTitle>
-            <CardDescription className="text-2xl font-semibold text-foreground">
-              {purchasesCount}
-            </CardDescription>
-          </CardHeader>
-        </Card>
-      </section>
-
-      {/* Featured prompts */}
-      <section className="space-y-4">
-        <div className="flex items-center justify-between gap-2">
-          <div>
-            <h2 className="text-lg font-semibold">Featured prompts</h2>
-            <p className="text-xs text-muted-foreground">
-              Curated automatically from sales, ratings, and freshness.
-            </p>
-          </div>
-          <Button asChild variant="outline" size="sm">
-            <Link href="/prompts">View marketplace</Link>
-          </Button>
-        </div>
-
-        {featuredPrompts.length === 0 ? (
-          <Card>
-            <CardHeader>
-              <CardTitle className="text-sm">No prompts yet</CardTitle>
-              <CardDescription className="text-xs">
-                Once creators publish public prompts, they’ll be featured here.
-              </CardDescription>
-            </CardHeader>
-          </Card>
-        ) : (
-          <div className="grid gap-4 md:grid-cols-3">
-            {featuredPrompts.map((p) => {
-              const priceNumber = p.price ? Number(p.price) : 0;
-              const priceDisplay =
-                priceNumber > 0 ? `$${priceNumber.toFixed(2)}` : "Free";
-              const sales = p.sales;
-              const avg = p.avgRating;
-              const ratingCount = p.ratingCount;
-
-              return (
-                <Link
-                  key={p.id}
-                  href={`/prompts/${p.id}`}
-                  className="group"
-                >
-                  <Card className="flex h-full flex-col overflow-hidden border border-slate-200/70 transition-all duration-150 hover:-translate-y-1 hover:shadow-lg">
-                    <PromptPreviewImage
-                      src={p.previewImage}
-                      alt={p.title ?? "Prompt preview"}
-                    />
-                    <CardHeader className="space-y-2">
-                      <CardTitle className="line-clamp-2 text-sm">
-                        {p.title}
-                      </CardTitle>
-                      <CardDescription className="line-clamp-2 text-xs">
-                        {p.description}
-                      </CardDescription>
-                    </CardHeader>
-                    <CardContent className="mt-auto flex flex-col gap-2 pb-3 text-xs">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <Badge
-                          variant="outline"
-                          className="rounded-full bg-white/70 backdrop-blur"
-                        >
-                          {priceDisplay}
-                        </Badge>
-                        {Array.isArray(p.tags) &&
-                          p.tags.slice(0, 2).map((tag: string) => (
-                            <Badge
-                              key={tag}
-                              variant="secondary"
-                              className="rounded-full"
-                            >
-                              #{tag}
-                            </Badge>
-                          ))}
-                        {p.isFeatured && (
-                          <Badge
-                            variant="secondary"
-                            className="rounded-full bg-amber-100 text-amber-800 border-amber-200"
-                          >
-                            Featured
-                          </Badge>
-                        )}
-                      </div>
-                      <div className="flex items-center justify-between text-[11px] text-muted-foreground">
-                        <span>
-                          {sales} sale{sales === 1 ? "" : "s"}
-                        </span>
-                        {avg && ratingCount > 0 ? (
-                          <span>
-                            {avg.toFixed(1)} / 5 · {ratingCount} rating
-                            {ratingCount === 1 ? "" : "s"}
-                          </span>
-                        ) : (
-                          <span>No ratings yet</span>
-                        )}
-                      </div>
-                    </CardContent>
-                  </Card>
-                </Link>
-              );
-            })}
-          </div>
-        )}
-      </section>
-
-      {/* Split section: buyers vs creators */}
-      <section className="grid gap-4 md:grid-cols-2">
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-sm font-semibold">
-              For buyers
-            </CardTitle>
-            <CardDescription className="text-xs">
-              Find prompts that actually drive results, not just demos.
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-2 text-xs text-muted-foreground">
-            <ul className="list-inside list-disc space-y-1">
-              <li>Browse by price, tags, rating, and sales.</li>
-              <li>Pay once, unlock forever in your library.</li>
-              <li>Test any purchased prompt in the built-in chat playground.</li>
-            </ul>
-            <Button asChild size="sm" className="mt-2">
-              <Link href="/prompts">Start browsing</Link>
-            </Button>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-sm font-semibold">
-              For creators
-            </CardTitle>
-            <CardDescription className="text-xs">
-              Turn your best prompts into a real revenue stream in a weekend.
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-2 text-xs text-muted-foreground">
-            <ul className="list-inside list-disc space-y-1">
-              <li>Publish, price, and update prompts with version history.</li>
-              <li>Track revenue, views, sales, and conversion per prompt.</li>
-              <li>See &quot;also bought&quot; insights and ratings from buyers.</li>
-            </ul>
-            <Button
-              asChild
-              size="sm"
-              variant="outline"
-              className="mt-2"
+          <div className="mt-8 flex flex-wrap items-center gap-3">
+            <Link
+              href={primaryActionHref}
+              className="inline-flex items-center justify-center rounded-full bg-foreground px-6 py-3 text-sm font-semibold text-background shadow-lg transition hover:opacity-90"
             >
-              <Link href={currentUser ? "/creator/prompts" : "/auth/login"}>
-                Open creator dashboard
+              {primaryActionLabel}
+            </Link>
+            <Link
+              href="/prompts"
+              className="inline-flex items-center justify-center rounded-full border border-border/70 px-6 py-3 text-sm font-semibold text-foreground transition hover:bg-muted"
+            >
+              Browse marketplace
+            </Link>
+          </div>
+          <p className="mt-4 text-xs uppercase tracking-[0.4em] text-muted-foreground">
+            Instant access • One-time purchase • Creator payouts via Stripe
+          </p>
+        </section>
+
+        <section className="rounded-2xl border border-border/60 bg-card p-6 shadow-sm">
+          <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <p className="text-xs uppercase tracking-wide text-muted-foreground">Marketplace facts</p>
+              <h2 className="text-2xl font-semibold text-foreground">Built for real workflows</h2>
+            </div>
+            <Link
+              href="/prompts"
+              className="text-sm font-semibold text-foreground transition hover:text-foreground/80"
+            >
+              Browse prompts
+            </Link>
+          </div>
+          <div className="mt-6 grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
+            <article className="flex flex-col gap-2 rounded-2xl border border-border/70 bg-background/40 p-4">
+              <p className="text-xs uppercase tracking-wide text-muted-foreground">Prompts</p>
+              <p className="text-3xl font-bold text-foreground">{promptCount ?? 0}</p>
+              <p className="text-sm text-muted-foreground">Production-ready prompts verified by PromptSwap.</p>
+            </article>
+            <article className="flex flex-col gap-2 rounded-2xl border border-border/70 bg-background/40 p-4">
+              <p className="text-xs uppercase tracking-wide text-muted-foreground">Creator payouts</p>
+              <p className="text-3xl font-bold text-foreground">Stripe-ready</p>
+              <p className="text-sm text-muted-foreground">
+                Creators land instant deposits, so they keep building.
+              </p>
+            </article>
+            <article className="flex flex-col gap-2 rounded-2xl border border-border/70 bg-background/40 p-4">
+              <p className="text-xs uppercase tracking-wide text-muted-foreground">Support</p>
+              <p className="text-3xl font-bold text-foreground">Human-first</p>
+              <p className="text-sm text-muted-foreground">
+                We're in your corner if prompts need support or tuning.
+              </p>
+            </article>
+          </div>
+        </section>
+
+        <section className="space-y-6">
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <h2 className="text-2xl font-semibold text-foreground">Featured prompts</h2>
+              <p className="text-sm text-muted-foreground">
+                Handpicked creations to accelerate your next launch.
+              </p>
+            </div>
+            <Link
+              href="/prompts"
+              className="text-sm font-semibold text-foreground transition hover:text-foreground/80"
+            >
+              Browse all prompts
+            </Link>
+          </div>
+
+          {featuredPrompts.length === 0 ? (
+            <div className="rounded-xl border border-dashed border-border/60 bg-muted/40 p-6 text-center text-sm text-muted-foreground">
+              <p>No featured prompts yet. Explore the marketplace to discover new favorites.</p>
+              <Link
+                href="/prompts"
+                className="mt-3 inline-flex items-center justify-center rounded-full border border-border/70 px-4 py-2 text-sm font-semibold text-foreground"
+              >
+                Browse marketplace
               </Link>
-            </Button>
-          </CardContent>
-        </Card>
-      </section>
+            </div>
+          ) : (
+            <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
+              {featuredPrompts.map((p) => {
+                const priceNumber = p.price ? Number(p.price) : 0;
+                const priceDisplay = priceNumber > 0 ? `$${priceNumber.toFixed(2)}` : "Free";
+                const description =
+                  p.description && p.description.length > 120
+                    ? `${p.description.slice(0, 120)}...`
+                    : p.description ?? "No description provided.";
+
+                return (
+                  <article
+                    key={p.id}
+                    className="flex h-full flex-col gap-4 rounded-2xl border border-border/70 bg-card p-5 shadow-sm transition hover:-translate-y-0.5 hover:shadow-lg"
+                  >
+                    <div className="space-y-2">
+                      <h3 className="text-lg font-semibold text-foreground line-clamp-2">{p.title}</h3>
+                      <p className="text-sm text-muted-foreground">{description}</p>
+                    </div>
+                    <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
+                      {(p.tags ?? []).slice(0, 4).map((tag: string) => (
+                        <span
+                          key={tag}
+                          className="rounded-full border border-border/50 px-3 py-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground"
+                        >
+                          {tag}
+                        </span>
+                      ))}
+                    </div>
+                    <div className="mt-auto flex items-center justify-between text-sm text-muted-foreground">
+                      <span className="text-base font-semibold text-foreground">{priceDisplay}</span>
+                      <Link
+                        href={`/prompt/${p.id}`}
+                        className="text-sm font-semibold text-primary transition hover:underline"
+                      >
+                        View prompt
+                      </Link>
+                    </div>
+                  </article>
+                );
+              })}
+            </div>
+          )}
+        </section>
+      </div>
     </main>
   );
 }

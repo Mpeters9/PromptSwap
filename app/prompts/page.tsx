@@ -7,9 +7,6 @@ import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@/com
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { PromptPreviewImage } from "@/components/PromptPreviewImage";
-
-type PromptWithRelations = Awaited<ReturnType<typeof prisma.prompt.findMany>>[number];
 
 type SearchParams = {
   q?: string | string[];
@@ -130,6 +127,17 @@ export default async function PromptsIndexPage({
     "purchase groupBy",
   );
 
+  ratingGroups = await safeFetch(
+    () =>
+      prisma.promptRating.groupBy({
+        by: ["promptId"],
+        _avg: { rating: true },
+        _count: { rating: true },
+      }),
+    [],
+    "rating groupBy",
+  );
+
   userPurchases = currentUserId
     ? await safeFetch(
         () =>
@@ -143,17 +151,6 @@ export default async function PromptsIndexPage({
         "user purchases",
       )
     : [];
-
-  ratingGroups = await safeFetch(
-    () =>
-      prisma.promptRating.groupBy({
-        by: ["promptId"],
-        _avg: { rating: true },
-        _count: { rating: true },
-      }),
-    [],
-    "rating groupBy",
-  );
 
   // Maps for quick lookup: sales & ownership
   const salesByPromptId = new Map<number, number>();
@@ -217,259 +214,251 @@ export default async function PromptsIndexPage({
   const promptsToShow = sorted;
 
   return (
-    <main className="mx-auto flex w/full max-w-5xl flex-col gap-6 px-4 py-8">
-      {/* Header + quick links */}
-      <div className="flex flex-wrap items-baseline justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-semibold tracking-tight">
-            Prompt marketplace
-          </h1>
-          <p className="text-sm text-muted-foreground">
-            Discover, buy, and test prompts from top creators.
-          </p>
-        </div>
-        <div className="flex gap-2">
-          <Button asChild variant="outline" size="sm">
-            <Link href="/purchases">My purchases</Link>
-          </Button>
-          <Button asChild size="sm">
-            <Link href="/creator/prompts">Creator dashboard</Link>
-          </Button>
-        </div>
-      </div>
-
-      {/* Search + filters */}
-      <section className="rounded-lg border bg-card p-4">
-        <form className="flex flex-col gap-3 md:flex-row md:flex-wrap md:items-end">
-          <div className="flex-1 min-w-[180px] space-y-1">
-            <label
-              htmlFor="q"
-              className="text-xs font-medium text-muted-foreground"
-            >
-              Search
-            </label>
-            <Input
-              id="q"
-              name="q"
-              placeholder="Search by title or description..."
-              defaultValue={q}
-            />
+    <main className="min-h-screen bg-background">
+      <div className="mx-auto max-w-6xl px-4 py-8 space-y-8">
+        {/* Header + quick links */}
+        <div className="flex flex-wrap items-center justify-between gap-4">
+          <div className="space-y-2">
+            <h1 className="text-3xl font-semibold tracking-tight">Marketplace</h1>
+            <p className="text-sm text-muted-foreground">
+              Browse prompts created by the community.
+            </p>
           </div>
-
-          <div className="w-[150px] space-y-1">
-            <label
-              htmlFor="priceFilter"
-              className="text-xs font-medium text-muted-foreground"
-            >
-              Price
-            </label>
-            <select
-              id="priceFilter"
-              name="priceFilter"
-              defaultValue={priceFilter}
-              className="h-9 w-full rounded-md border border-input bg-background px-2 text-sm"
-            >
-              <option value="all">All</option>
-              <option value="free">Free</option>
-              <option value="paid">Paid</option>
-            </select>
-          </div>
-
-          <div className="w-[130px] space-y-1">
-            <label
-              htmlFor="minPrice"
-              className="text-xs font-medium text-muted-foreground"
-            >
-              Min price
-            </label>
-            <Input
-              id="minPrice"
-              name="minPrice"
-              type="number"
-              step="0.5"
-              min="0"
-              defaultValue={minPriceRaw}
-            />
-          </div>
-
-          <div className="w-[130px] space-y-1">
-            <label
-              htmlFor="maxPrice"
-              className="text-xs font-medium text-muted-foreground"
-            >
-              Max price
-            </label>
-            <Input
-              id="maxPrice"
-              name="maxPrice"
-              type="number"
-              step="0.5"
-              min="0"
-              defaultValue={maxPriceRaw}
-            />
-          </div>
-
-          <div className="w-[130px] space-y-1">
-            <label
-              htmlFor="minRating"
-              className="text-xs font-medium text-muted-foreground"
-            >
-              Min rating
-            </label>
-            <Input
-              id="minRating"
-              name="minRating"
-              type="number"
-              min="1"
-              max="5"
-              step="0.5"
-              defaultValue={minRatingRaw}
-            />
-          </div>
-
-          <div className="w-[150px] space-y-1">
-            <label
-              htmlFor="tag"
-              className="text-xs font-medium text-muted-foreground"
-            >
-              Tag
-            </label>
-            <Input
-              id="tag"
-              name="tag"
-              placeholder="e.g. marketing"
-              defaultValue={tag}
-            />
-          </div>
-
-          <div className="w/[160px] space-y-1">
-            <label
-              htmlFor="sort"
-              className="text-xs font-medium text-muted-foreground"
-            >
-              Sort by
-            </label>
-            <select
-              id="sort"
-              name="sort"
-              defaultValue={sort}
-              className="h-9 w-full rounded-md border border-input bg-background px-2 text-sm"
-            >
-              <option value="latest">Latest</option>
-              <option value="sales">Most sales</option>
-              <option value="rating">Highest rated</option>
-              <option value="price_asc">Price: low to high</option>
-              <option value="price_desc">Price: high to low</option>
-            </select>
-          </div>
-
-          <div className="ml-auto flex gap-2 pt-1">
-            <Button type="submit" size="sm">
-              Apply
+          <div className="flex gap-2">
+            <Button asChild variant="outline" size="sm">
+              <Link href="/purchases">My purchases</Link>
             </Button>
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              asChild
-            >
-              <Link href="/prompts">Reset</Link>
+            <Button asChild size="sm">
+              <Link href="/creator/prompts">Creator dashboard</Link>
             </Button>
           </div>
-        </form>
-      </section>
+        </div>
 
-      {/* Results */}
-      {promptsToShow.length === 0 ? (
-        <Card>
-          <CardHeader>
-            <CardTitle>No prompts match your filters</CardTitle>
-            <CardDescription>
-              Try clearing some filters or searching for something else.
-            </CardDescription>
-          </CardHeader>
-        </Card>
-      ) : (
-        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-          {promptsToShow.map((prompt) => {
-            const promptKey = prompt.id;
-            const salesCount = salesByPromptId.get(promptKey) ?? 0;
-            const isOwned = ownedPromptIds.has(promptKey);
-            const priceNumber = prompt.price ? Number(prompt.price) : 0;
-            const priceDisplay =
-              priceNumber > 0 ? `$${priceNumber.toFixed(2)}` : "Free";
-
-            const ratingStats = ratingStatsByPromptId.get(promptKey);
-            const avg = ratingStats?.avg ?? null;
-            const ratingCount = ratingStats?.count ?? 0;
-
-            return (
-              <Link
-                key={prompt.id}
-                href={`/prompts/${prompt.id}`}
-                className="group"
+        {/* Search + filters */}
+        <section className="rounded-xl border bg-card shadow-sm">
+          <form className="flex flex-col gap-4 p-4 md:flex-row md:flex-wrap md:items-end">
+            <div className="flex-1 min-w-[200px] space-y-1">
+              <label
+                htmlFor="q"
+                className="text-xs font-medium text-muted-foreground"
               >
-                <Card className="flex h-full flex-col transition-all duration-150 hover:-translate-y-1 hover:shadow-lg">
-                  <PromptPreviewImage
-                    src={prompt.previewImage}
-                    alt={prompt.title}
-                  />
-                  <CardHeader className="space-y-2">
-                    <CardTitle className="line-clamp-2 text-base">
-                      {prompt.title}
-                    </CardTitle>
-                    <CardDescription className="line-clamp-2 text-xs">
-                      {prompt.description}
-                    </CardDescription>
-                  </CardHeader>
-                  <CardContent className="mt-auto flex flex-col gap-2 pb-3 text-xs">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <Badge
-                        variant="outline"
-                        className="rounded-full bg-white/70 backdrop-blur"
-                      >
-                        {priceDisplay}
-                      </Badge>
-                      {Array.isArray(prompt.tags) &&
-                        prompt.tags.slice(0, 3).map((tagValue: string) => (
-                          <Badge
+                Search
+              </label>
+              <Input
+                id="q"
+                name="q"
+                placeholder="Search by title or description..."
+                defaultValue={q}
+                className="w-full"
+              />
+            </div>
+
+            <div className="w-[160px] space-y-1">
+              <label
+                htmlFor="priceFilter"
+                className="text-xs font-medium text-muted-foreground"
+              >
+                Price
+              </label>
+              <select
+                id="priceFilter"
+                name="priceFilter"
+                defaultValue={priceFilter}
+                className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
+              >
+                <option value="all">All</option>
+                <option value="free">Free</option>
+                <option value="paid">Paid</option>
+              </select>
+            </div>
+
+            <div className="w-[140px] space-y-1">
+              <label
+                htmlFor="minPrice"
+                className="text-xs font-medium text-muted-foreground"
+              >
+                Min price
+              </label>
+              <Input
+                id="minPrice"
+                name="minPrice"
+                type="number"
+                step="0.5"
+                min="0"
+                defaultValue={minPriceRaw}
+              />
+            </div>
+
+            <div className="w-[140px] space-y-1">
+              <label
+                htmlFor="maxPrice"
+                className="text-xs font-medium text-muted-foreground"
+              >
+                Max price
+              </label>
+              <Input
+                id="maxPrice"
+                name="maxPrice"
+                type="number"
+                step="0.5"
+                min="0"
+                defaultValue={maxPriceRaw}
+              />
+            </div>
+
+            <div className="w-[140px] space-y-1">
+              <label
+                htmlFor="minRating"
+                className="text-xs font-medium text-muted-foreground"
+              >
+                Min rating
+              </label>
+              <Input
+                id="minRating"
+                name="minRating"
+                type="number"
+                min="1"
+                max="5"
+                step="0.5"
+                defaultValue={minRatingRaw}
+              />
+            </div>
+
+            <div className="w-[160px] space-y-1">
+              <label
+                htmlFor="tag"
+                className="text-xs font-medium text-muted-foreground"
+              >
+                Tag
+              </label>
+              <Input
+                id="tag"
+                name="tag"
+                placeholder="e.g. marketing"
+                defaultValue={tag}
+              />
+            </div>
+
+            <div className="w-[170px] space-y-1">
+              <label
+                htmlFor="sort"
+                className="text-xs font-medium text-muted-foreground"
+              >
+                Sort by
+              </label>
+              <select
+                id="sort"
+                name="sort"
+                defaultValue={sort}
+                className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
+              >
+                <option value="latest">Latest</option>
+                <option value="sales">Most sales</option>
+                <option value="rating">Highest rated</option>
+                <option value="price_asc">Price: low to high</option>
+                <option value="price_desc">Price: high to low</option>
+              </select>
+            </div>
+
+            <div className="ml-auto flex gap-2">
+              <Button type="submit" size="sm">
+                Apply
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                asChild
+              >
+                <Link href="/prompts">Reset</Link>
+              </Button>
+            </div>
+          </form>
+        </section>
+
+        {/* Results */}
+        {promptsToShow.length === 0 ? (
+          <div className="rounded-xl border bg-muted/30 p-8 text-center text-muted-foreground">
+            <p>No prompts found. Try adjusting your filters or check back later.</p>
+          </div>
+        ) : (
+          <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
+            {promptsToShow.map((prompt) => {
+              const promptKey = prompt.id;
+              const salesCount = salesByPromptId.get(promptKey) ?? 0;
+              const isOwned = ownedPromptIds.has(promptKey);
+              const priceNumber = prompt.price ? Number(prompt.price) : 0;
+              const priceDisplay =
+                priceNumber > 0 ? `$${priceNumber.toFixed(2)}` : "Free";
+
+              const ratingStats = ratingStatsByPromptId.get(promptKey);
+              const avg = ratingStats?.avg ?? null;
+              const ratingCount = ratingStats?.count ?? 0;
+              const description =
+                prompt.description && prompt.description.length > 160
+                  ? `${prompt.description.slice(0, 160)}...`
+                  : prompt.description;
+
+              return (
+                <div
+                  key={prompt.id}
+                  className="flex h-full flex-col rounded-xl border bg-card p-4 shadow-sm transition-shadow hover:shadow-md"
+                >
+                  <div className="space-y-2">
+                    <h2 className="text-lg font-semibold leading-snug">{prompt.title}</h2>
+                    {Array.isArray(prompt.tags) && prompt.tags.length > 0 && (
+                      <div className="flex flex-wrap gap-2">
+                        {prompt.tags.slice(0, 4).map((tagValue: string) => (
+                          <span
                             key={tagValue}
-                            variant="secondary"
-                            className="rounded-full"
+                            className="rounded-full bg-muted px-2 py-1 text-[11px] text-muted-foreground"
                           >
-                            #{tagValue}
-                          </Badge>
+                            {tagValue}
+                          </span>
                         ))}
+                      </div>
+                    )}
+                    <p className="text-sm text-muted-foreground line-clamp-2">
+                      {description || "No description provided."}
+                    </p>
+                  </div>
+
+                  <div className="mt-auto space-y-3 pt-4 text-sm">
+                    <div className="flex items-center justify-between">
+                      <span className="font-semibold">{priceDisplay}</span>
                       {salesCount > 0 && (
-                        <Badge variant="secondary">
-                          {salesCount} sale
-                          {salesCount === 1 ? "" : "s"}
-                        </Badge>
+                        <span className="text-xs text-muted-foreground">
+                          {salesCount} sale{salesCount === 1 ? "" : "s"}
+                        </span>
                       )}
                     </div>
-
-                    <div className="flex items-center justify-between text-[11px] text-muted-foreground">
+                    <div className="flex items-center justify-between text-xs text-muted-foreground">
                       {avg !== null && ratingCount > 0 ? (
                         <span>
-                          {avg.toFixed(1)} / 5 · {ratingCount} rating
+                          {avg.toFixed(1)} ★ · {ratingCount} rating
                           {ratingCount === 1 ? "" : "s"}
                         </span>
                       ) : (
                         <span>No ratings yet</span>
                       )}
                       {isOwned && (
-                        <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-[11px] font-medium text-emerald-700">
+                        <span className="rounded-full bg-emerald-50 px-2 py-0.5 font-medium text-emerald-700">
                           Owned
                         </span>
                       )}
                     </div>
-                  </CardContent>
-                </Card>
-              </Link>
-            );
-          })}
-        </div>
-      )}
+                    <div className="pt-1">
+                      <Button asChild variant="outline" size="sm" className="w-full">
+                        <Link href={`/prompt/${prompt.id}`}>View details</Link>
+                      </Button>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
     </main>
   );
 }

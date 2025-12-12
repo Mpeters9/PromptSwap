@@ -30,19 +30,21 @@ export default function LoginPage() {
   };
 
   return (
-    <div className="min-h-screen bg-gray-50">
-      <div className="mx-auto flex min-h-screen max-w-4xl flex-col items-center justify-center px-4 py-12">
-        <div className="w-full max-w-md rounded-2xl bg-white p-8 shadow-lg">
-          <div className="mb-6 text-center">
-            <h1 className="text-2xl font-semibold text-slate-900">Welcome back</h1>
-            <p className="mt-2 text-sm text-slate-600">Log in to continue to your dashboard.</p>
-          </div>
+    <main className="min-h-screen bg-background flex items-center justify-center px-4">
+      <div className="w-full max-w-md space-y-6">
+        <div className="text-center space-y-2">
+          <h1 className="text-2xl font-semibold tracking-tight">Sign in to PromptSwap</h1>
+          <p className="text-sm text-muted-foreground">
+            Enter your email and password to access your account.
+          </p>
+        </div>
 
+        <div className="rounded-2xl border bg-card p-6 shadow-sm space-y-4">
           <SocialLoginButtons />
 
-          <form className="mt-6 space-y-4" onSubmit={handleSubmit}>
-            <div>
-              <label className="mb-1 block text-sm font-medium text-slate-700" htmlFor="email">
+          <form className="space-y-4" onSubmit={handleSubmit}>
+            <div className="space-y-1">
+              <label className="text-sm font-medium text-foreground" htmlFor="email">
                 Email
               </label>
               <input
@@ -52,13 +54,13 @@ export default function LoginPage() {
                 required
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
-                className="w-full rounded-lg border border-slate-200 px-4 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/30"
+                className="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm shadow-sm focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
                 placeholder="you@example.com"
               />
             </div>
 
-            <div>
-              <label className="mb-1 block text-sm font-medium text-slate-700" htmlFor="password">
+            <div className="space-y-1">
+              <label className="text-sm font-medium text-foreground" htmlFor="password">
                 Password
               </label>
               <input
@@ -68,7 +70,7 @@ export default function LoginPage() {
                 required
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                className="w-full rounded-lg border border-slate-200 px-4 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/30"
+                className="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm shadow-sm focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
                 placeholder="********"
               />
             </div>
@@ -79,15 +81,15 @@ export default function LoginPage() {
               {loading ? 'Logging in...' : 'Log In'}
             </Button>
           </form>
+        </div>
 
-          <div className="mt-6 text-center text-sm text-slate-600">
-            Don&apos;t have an account?{' '}
-            <Link href="/auth/signup" className="font-semibold text-blue-600 hover:text-blue-700">
-              Sign up
-            </Link>
-          </div>
+        <div className="text-center text-sm text-muted-foreground">
+          Don&apos;t have an account?{' '}
+          <Link href="/auth/signup" className="font-semibold text-primary hover:underline">
+            Sign up
+          </Link>
         </div>
       </div>
-    </div>
+    </main>
   );
 }

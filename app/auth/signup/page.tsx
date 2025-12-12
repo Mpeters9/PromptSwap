@@ -42,19 +42,21 @@ export default function SignUpPage() {
   };
 
   return (
-    <div className="min-h-screen bg-gray-50">
-      <div className="mx-auto flex min-h-screen max-w-4xl flex-col items-center justify-center px-4 py-12">
-        <div className="w-full max-w-md rounded-2xl bg-white p-8 shadow-lg">
-          <div className="mb-6 text-center">
-            <h1 className="text-2xl font-semibold text-slate-900">Create your account</h1>
-            <p className="mt-2 text-sm text-slate-600">Sign up to start using PromptSwap.</p>
-          </div>
+    <main className="min-h-screen bg-background flex items-center justify-center px-4">
+      <div className="w-full max-w-md space-y-6">
+        <div className="text-center space-y-2">
+          <h1 className="text-2xl font-semibold tracking-tight">Create your PromptSwap account</h1>
+          <p className="text-sm text-muted-foreground">
+            Start buying and selling prompts in minutes.
+          </p>
+        </div>
 
+        <div className="rounded-2xl border bg-card p-6 shadow-sm space-y-4">
           <SocialLoginButtons />
 
-          <form className="mt-6 space-y-4" onSubmit={handleSubmit}>
-            <div>
-              <label className="mb-1 block text-sm font-medium text-slate-700" htmlFor="email">
+          <form className="space-y-4" onSubmit={handleSubmit}>
+            <div className="space-y-1">
+              <label className="text-sm font-medium text-foreground" htmlFor="email">
                 Email
               </label>
               <input
@@ -64,13 +66,13 @@ export default function SignUpPage() {
                 required
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
-                className="w-full rounded-lg border border-slate-200 px-4 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/30"
+                className="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm shadow-sm focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
                 placeholder="you@example.com"
               />
             </div>
 
-            <div>
-              <label className="mb-1 block text-sm font-medium text-slate-700" htmlFor="password">
+            <div className="space-y-1">
+              <label className="text-sm font-medium text-foreground" htmlFor="password">
                 Password
               </label>
               <input
@@ -80,14 +82,14 @@ export default function SignUpPage() {
                 required
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                className="w-full rounded-lg border border-slate-200 px-4 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/30"
+                className="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm shadow-sm focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
                 placeholder="********"
               />
             </div>
 
-            <div>
+            <div className="space-y-1">
               <label
-                className="mb-1 block text-sm font-medium text-slate-700"
+                className="text-sm font-medium text-foreground"
                 htmlFor="confirmPassword"
               >
                 Confirm Password
@@ -99,7 +101,7 @@ export default function SignUpPage() {
                 required
                 value={confirmPassword}
                 onChange={(e) => setConfirmPassword(e.target.value)}
-                className="w-full rounded-lg border border-slate-200 px-4 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/30"
+                className="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm shadow-sm focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
                 placeholder="********"
               />
             </div>
@@ -110,15 +112,15 @@ export default function SignUpPage() {
               {loading ? 'Signing up...' : 'Sign Up'}
             </Button>
           </form>
+        </div>
 
-          <div className="mt-6 text-center text-sm text-slate-600">
-            Already have an account?{' '}
-            <Link href="/auth/login" className="font-semibold text-blue-600 hover:text-blue-700">
-              Log in
-            </Link>
-          </div>
+        <div className="text-center text-sm text-muted-foreground">
+          Already have an account?{' '}
+          <Link href="/auth/login" className="font-semibold text-primary hover:underline">
+            Sign in
+          </Link>
         </div>
       </div>
-    </div>
+    </main>
   );
 }

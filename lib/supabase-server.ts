@@ -5,23 +5,37 @@ const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
 const supabaseAnonKey =
   process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY;
 
-export async function createSupabaseServerClient() {
-  const cookieStore = await cookies();
-
-  if (!supabaseUrl || !supabaseAnonKey) {
-    console.error(
-      "[supabaseServer] Missing NEXT_PUBLIC_SUPABASE_URL or anon key. Server auth will be disabled."
-    );
-    throw new Error("Supabase server client is not configured");
+function ensureSupabaseEnv() {
+  if (!supabaseUrl) {
+    throw new Error("NEXT_PUBLIC_SUPABASE_URL is required to initialize Supabase.");
   }
 
-  return createServerClient(supabaseUrl, supabaseAnonKey, {
+  if (!supabaseAnonKey) {
+    throw new Error(
+      "NEXT_PUBLIC_SUPABASE_ANON_KEY or SUPABASE_ANON_KEY is required to initialize Supabase."
+    );
+  }
+}
+
+export async function createSupabaseServerClient() {
+  const cookieStore = await cookies();
+  ensureSupabaseEnv();
+
+  return createServerClient(supabaseUrl!, supabaseAnonKey!, {
     cookies: {
-      getAll() {
-        return cookieStore.getAll().map(({ name, value }) => ({ name, value }));
+      get(name) {
+        return cookieStore.get(name)?.value;
       },
-      setAll() {
-        // No-op in server components to avoid Next.js cookie mutation errors.
+      set(name, value, options) {
+        cookieStore.set({ name, value, ...options });
+      },
+      remove(name, options) {
+        cookieStore.set({
+          name,
+          value: "",
+          ...options,
+          maxAge: 0,
+        });
       },
     },
   });

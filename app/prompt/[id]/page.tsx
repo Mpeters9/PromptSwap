@@ -3,6 +3,8 @@ import { notFound, redirect } from 'next/navigation';
 import { createClient } from '@supabase/supabase-js';
 
 import { PurchaseButton } from '@/components/PurchaseButton';
+import { Badge } from '@/components/ui/badge';
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { buildMetadata } from '@/lib/metadata';
 
 export const dynamic = 'force-dynamic';
@@ -33,7 +35,7 @@ async function extractAccessToken(): Promise<string | null> {
   if (!projectRef) return null;
   const cookieStore = await cookies();
   const cookieName = `sb-${projectRef}-auth-token`;
-  const value = cookieStore.get(cookieName)?.value ?? cookieStore.get("supabase-auth-token")?.value;
+  const value = cookieStore.get(cookieName)?.value ?? cookieStore.get('supabase-auth-token')?.value;
   if (!value) return null;
 
   try {
@@ -105,32 +107,60 @@ export default async function PromptPage({ params }: { params: { id: string } })
   }
 
   return (
-    <div className="mx-auto max-w-4xl px-4 py-12">
-      <div className="space-y-6 rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div>
-            <h1 className="text-3xl font-semibold text-slate-900">{prompt.title}</h1>
-            <p className="mt-1 text-sm text-slate-600">
+    <main className="min-h-screen bg-background">
+      <div className="mx-auto max-w-5xl px-4 py-8 grid gap-8 lg:grid-cols-[2fr,1fr]">
+        <section className="space-y-6">
+          <div className="space-y-2">
+            <h1 className="text-3xl font-semibold tracking-tight">{prompt.title}</h1>
+            <p className="text-sm text-muted-foreground">
               Seller: {sellerProfile?.username || prompt.user_id || 'Unknown seller'}
             </p>
           </div>
-          <div className="text-right">
-            <div className="rounded-full bg-indigo-50 px-3 py-1 text-sm font-semibold text-indigo-700">
-              {formatPrice(prompt.price)}
-            </div>
-            {!owned && (
-              <p className="mt-1 text-xs text-slate-500">Instant access after purchase.</p>
-            )}
-          </div>
-        </div>
 
-        <div className="space-y-3">
-          <h2 className="text-sm font-semibold text-slate-900">Prompt Content</h2>
-          <pre className="whitespace-pre-wrap break-words rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-900">
-            {prompt.prompt_text}
-          </pre>
-        </div>
+          <div className="space-y-4">
+            <div className="space-y-2">
+              <h2 className="text-lg font-semibold">Description</h2>
+              <p className="text-sm text-muted-foreground">
+                {prompt.description || 'No description provided.'}
+              </p>
+            </div>
+
+            <div className="space-y-2">
+              <h3 className="text-lg font-semibold">Prompt content</h3>
+              <pre className="whitespace-pre-wrap break-words rounded-lg border bg-muted/50 p-4 text-sm text-foreground">
+                {prompt.prompt_text}
+              </pre>
+            </div>
+          </div>
+        </section>
+
+        <aside className="space-y-4 lg:sticky lg:top-6">
+          <Card className="shadow-sm">
+            <CardHeader className="space-y-2">
+              <CardTitle className="text-xl font-semibold">{formatPrice(prompt.price)}</CardTitle>
+              <CardDescription className="text-sm text-muted-foreground">
+                One-time purchase. Instant access to full prompt.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              {owned ? (
+                <Badge
+                  variant="secondary"
+                  className="w-full justify-center bg-emerald-100 text-emerald-800 border-emerald-200"
+                >
+                  You own this prompt
+                </Badge>
+              ) : (
+                <PurchaseButton promptId={prompt.id} label="Buy with Stripe" />
+              )}
+              <div className="space-y-1 text-sm text-muted-foreground">
+                <p>Secure checkout via Stripe.</p>
+                <p>Access is tied to your account.</p>
+              </div>
+            </CardContent>
+          </Card>
+        </aside>
       </div>
-    </div>
+    </main>
   );
 }
