@@ -1,0 +1,85 @@
+# PromptSwap Project Summary
+
+## Overview
+PromptSwap is a Next.js (App Router) web application designed for buying, selling, and swapping AI prompts. It connects creators who build effective AI workflows with users who need them, providing a marketplace for instant access to high-quality prompts.
+
+## Key Features
+- **Marketplace**: Browse and purchase prompts from verified creators with one-time pricing and instant downloads
+- **Swapping**: Peer-to-peer prompt exchanges to build collections without monetary transactions
+- **Moderation**: Admin-reviewed prompts to ensure quality and safety
+- **Creator Tools**: Upload prompts, manage earnings, track analytics, and receive Stripe payouts
+- **User Features**: Search, purchase, rate, and comment on prompts
+- **Community**: Rating system and comments for feedback
+
+## Technology Stack
+- **Frontend**: Next.js 16 with React 18, TypeScript, Tailwind CSS
+- **Backend**: Supabase (PostgreSQL database, authentication, storage)
+- **Payments**: Stripe (purchases, Connect for creator payouts)
+- **Deployment**: Vercel (with optional GitHub Actions)
+- **Additional**: Prisma for database management, Framer Motion for animations, Resend for emails
+
+## Core Components
+- User authentication and profiles
+- Prompt upload, management, and versioning
+- Purchase and download system
+- Swap functionality
+- Admin moderation panel
+- Creator dashboard with analytics
+- Real-time chat features
+- Marketplace with filtering and search
+
+## Database Schema (Key Tables)
+- profiles: User information, Stripe accounts, admin flags
+- prompts: Prompt details, pricing, approval status
+- prompt_versions: Version control for prompts
+- purchases: Transaction records
+- swaps: Exchange records
+- prompt_comments: User feedback
+- ratings: Prompt quality scores
+
+## Environment Setup
+Required environment variables:
+- NEXT_PUBLIC_SUPABASE_URL
+- NEXT_PUBLIC_SUPABASE_ANON_KEY
+- NEXT_PRIVATE_SUPABASE_SERVICE_ROLE_KEY
+- NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY
+- STRIPE_SECRET_KEY
+- STRIPE_WEBHOOK_SECRET
+- NEXT_PUBLIC_SITE_URL
+
+## Current Status
+- Basic app structure and routing implemented
+- Authentication system in place
+- Marketplace browsing functional
+- Purchase flow integrated with Stripe
+- Creator dashboard available
+- Moderation system exists
+
+## What Needs to Be Done Next
+1. Complete Supabase database setup and migrations
+2. Finish Stripe integration testing (webhooks, payouts)
+3. Deploy to Vercel for production
+4. Implement advanced search and filtering
+5. Add user notifications system
+6. Enhance community features (forums, messaging)
+7. Improve mobile responsiveness
+8. Add analytics and reporting
+9. Implement content moderation AI assistance
+10. Expand testing coverage and error handling
+
+## Development Commands
+- npm run dev: Start development server
+- npm run build: Build for production
+- npm run start: Start production server
+- npm run lint: Run ESLint
+- npm run db:test: Test database connection
+
+## File Structure Highlights
+- app/: Next.js app router pages
+- components/: Reusable UI components
+- lib/: Utility functions and configurations
+- prisma/: Database schema and migrations
+- supabase/: Database setup and migrations
+- public/: Static assets
+
+This platform aims to democratize access to effective AI prompts while providing creators with fair compensation through direct payouts.
