@@ -10,6 +10,7 @@ export const createPromptSchema = z.object({
   tags: z.array(z.string()).optional().nullable(),
   is_public: z.boolean().optional().default(true),
   version: z.number().optional().default(1),
+  status: z.enum(['draft', 'submitted']).optional().default('submitted'),
 });
 
 export const ratePromptSchema = z.object({
@@ -59,11 +60,10 @@ export const banUserSchema = z.object({
 
 // Combined admin moderation schema
 export const adminModerationSchema = z.object({
-  type: z.enum(['moderatePrompt', 'banUser']),
-  data: z.union([
-    moderatePromptSchema,
-    banUserSchema
-  ])
+  action: z.enum(['approve', 'reject', 'archive', 'ban']),
+  promptId: z.string().uuid('Invalid prompt ID').optional(),
+  userId: z.string().uuid('Invalid user ID').optional(),
+  reason: z.string().max(500, 'Reason too long').optional(),
 });
 
 // Swap action schema for swap updates

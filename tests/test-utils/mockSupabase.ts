@@ -2,7 +2,9 @@ import { randomUUID } from 'crypto';
 
 type TableRow = Record<string, any>;
 
-type Filter = { column: string; value: any };
+type FilterOperator = 'eq' | 'lt' | 'lte' | 'gt' | 'gte';
+
+type Filter = { column: string; operator: FilterOperator; value: any };
 
 type QueryState = {
   table: string;
@@ -11,7 +13,27 @@ type QueryState = {
 };
 
 function matchFilters(row: TableRow, filters: Filter[]): boolean {
-  return filters.every((f) => row[f.column] === f.value);
+  return filters.every((filter) => matchFilter(row, filter));
+}
+
+function matchFilter(row: TableRow, filter: Filter): boolean {
+  const actual = row[filter.column];
+  const expected = filter.value;
+
+  switch (filter.operator) {
+    case 'eq':
+      return actual === expected;
+    case 'lt':
+      return actual < expected;
+    case 'lte':
+      return actual <= expected;
+    case 'gt':
+      return actual > expected;
+    case 'gte':
+      return actual >= expected;
+    default:
+      return false;
+  }
 }
 
 class TableQuery {
@@ -28,14 +50,34 @@ class TableQuery {
     return this;
   }
 
-  eq(column: string, value: any) {
-    this.state.filters.push({ column, value });
+  private addFilter(column: string, operator: FilterOperator, value: any) {
+    this.state.filters.push({ column, operator, value });
     if (this.pendingUpdate) {
       const res = this.applyPendingUpdate();
       this.pendingUpdate = undefined;
       return res;
     }
     return this;
+  }
+
+  eq(column: string, value: any) {
+    return this.addFilter(column, 'eq', value);
+  }
+
+  lt(column: string, value: any) {
+    return this.addFilter(column, 'lt', value);
+  }
+
+  lte(column: string, value: any) {
+    return this.addFilter(column, 'lte', value);
+  }
+
+  gt(column: string, value: any) {
+    return this.addFilter(column, 'gt', value);
+  }
+
+  gte(column: string, value: any) {
+    return this.addFilter(column, 'gte', value);
   }
 
   or(_expr: string) {
@@ -50,6 +92,13 @@ class TableQuery {
 
   single() {
     return this.maybeSingle();
+  }
+
+  then(resolve: (value: any) => any, reject?: (reason: any) => any) {
+    const rows = this.state.rows.filter((r) => matchFilters(r, this.state.filters));
+    const result = { data: rows, error: null };
+    resolve(result);
+    return Promise.resolve(result);
   }
 
   insert(payload: any) {
@@ -166,6 +215,8 @@ export function createSupabaseMock(seed?: Partial<ReturnType<typeof defaultData>
           return new TableQuery({ table, rows: data.prompt_comments, filters: [] }, supabase as any);
         case 'notifications':
           return new TableQuery({ table, rows: data.notifications, filters: [] }, supabase as any);
+        case 'rate_limits':
+          return new TableQuery({ table, rows: data.rate_limits, filters: [] }, supabase as any);
         default:
           throw new Error(`Table not mocked: ${table}`);
       }
@@ -186,6 +237,7 @@ function defaultData() {
     refunds: [] as TableRow[],
     prompt_comments: [] as TableRow[],
     notifications: [] as TableRow[],
+    rate_limits: [] as TableRow[],
     authUser: null as any,
   };
 }

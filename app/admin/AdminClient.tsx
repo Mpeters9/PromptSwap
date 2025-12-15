@@ -1,5 +1,7 @@
 'use client';
 
+/* eslint-disable react-hooks/exhaustive-deps */
+
 import { useEffect, useMemo, useState } from 'react';
 
 
@@ -53,6 +55,7 @@ export default function AdminClient() {
   const [error, setError] = useState<string | null>(null);
   const [confirm, setConfirm] = useState<{ action: 'approve' | 'reject' | 'ban'; targetId: string } | null>(null);
 
+  /* eslint-disable-next-line react-hooks/exhaustive-deps */
   useEffect(() => {
     if (!loading && user) {
       void loadData();

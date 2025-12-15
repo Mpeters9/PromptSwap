@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { createSupabaseServerClient, getCurrentUser } from '@/lib/supabase/server';
+import { createSupabaseServerClient, createSupabaseAdminClient, getCurrentUser } from '@/lib/supabase/server';
 import { commentSchema } from '@/lib/validation/schemas';
 import { 
   createSuccessResponse, 
@@ -9,6 +9,7 @@ import {
   createNotFoundErrorResponse,
   ErrorCodes 
 } from '@/lib/api/responses';
+import { enforceRateLimit, rateLimitResponse, RateLimitExceeded } from '@/lib/rate-limit';
 
 export const runtime = 'nodejs';
 
@@ -111,6 +112,30 @@ export async function POST(
       return NextResponse.json(createNotFoundErrorResponse('Prompt'), { status: 404 });
     }
 
+    if (prompt.status !== 'approved') {
+      return NextResponse.json(
+        createErrorResponse(ErrorCodes.INVALID_STATUS, 'Prompt is not available for comments'),
+        { status: 400 }
+      );
+    }
+
+    const supabaseAdmin = await createSupabaseAdminClient();
+    try {
+      await enforceRateLimit({
+        request: req,
+        supabase: supabaseAdmin,
+        scope: 'prompt:comment',
+        limit: 10,
+        windowSeconds: 60,
+        userId: user.id,
+      });
+    } catch (err) {
+      if (err instanceof RateLimitExceeded) {
+        return rateLimitResponse(err);
+      }
+      throw err;
+    }
+
     // Insert the comment
     const { data: comment, error: insertError } = await supabase
       .from('prompt_comments')
@@ -143,4 +168,3 @@ export async function POST(
     ), { status: 500 });
   }
 }
-

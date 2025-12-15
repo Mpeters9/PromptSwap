@@ -4,6 +4,7 @@ import Link from 'next/link';
 import BuyButton from '@/components/BuyButton';
 import CopyButton from '@/components/CopyButton';
 import { PromptPreviewImage } from '@/components/PromptPreviewImage';
+import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { prisma } from '@/lib/prisma';
@@ -20,6 +21,8 @@ export type Prompt = {
   price: number | null;
   preview_image: string | null;
   is_public: boolean | null;
+  status: string | null;
+  moderation_note: string | null;
   created_at: string;
 };
 
@@ -216,34 +219,38 @@ export async function ratePrompt(formData: FormData) {
 async function getPrompt(id: number): Promise<Prompt | null> {
   const prompt = await prisma.prompt.findUnique({
     where: { id },
-    select: {
-      id: true,
-      userId: true,
-      title: true,
-      description: true,
-      promptText: true,
-      tags: true,
-      price: true,
-      previewImage: true,
-      isPublic: true,
-      createdAt: true,
-    },
-  });
+      select: {
+        id: true,
+        userId: true,
+        title: true,
+        description: true,
+        promptText: true,
+        tags: true,
+        price: true,
+        previewImage: true,
+        isPublic: true,
+        status: true,
+        moderationNote: true,
+        createdAt: true,
+      },
+    });
 
   if (!prompt) return null;
 
-  return {
-    id: prompt.id,
-    user_id: prompt.userId,
-    title: prompt.title,
-    description: prompt.description,
-    prompt_text: prompt.promptText ?? '',
-    tags: (prompt.tags as string[] | null) ?? null,
-    price: prompt.price ? Number(prompt.price) : null,
-    preview_image: prompt.previewImage,
-    is_public: prompt.isPublic,
-    created_at: prompt.createdAt?.toISOString() ?? new Date().toISOString(),
-  };
+    return {
+      id: prompt.id,
+      user_id: prompt.userId,
+      title: prompt.title,
+      description: prompt.description,
+      prompt_text: prompt.promptText ?? '',
+      tags: (prompt.tags as string[] | null) ?? null,
+      price: prompt.price ? Number(prompt.price) : null,
+      preview_image: prompt.previewImage,
+      is_public: prompt.isPublic,
+      status: prompt.status,
+      moderation_note: prompt.moderationNote,
+      created_at: prompt.createdAt?.toISOString() ?? new Date().toISOString(),
+    };
 }
 
 async function getRatings(promptId: number): Promise<Rating[]> {
@@ -324,11 +331,12 @@ async function getAlsoBoughtPrompts(promptId: number): Promise<AlsoBoughtPrompt[
   const coPromptIds = coPurchases.map((p) => p.promptId);
 
   // 3) Load prompt data for those prompts
-  const prompts = await prisma.prompt.findMany({
-    where: {
-      id: { in: coPromptIds },
-      isPublic: true,
-    },
+    const prompts = await prisma.prompt.findMany({
+      where: {
+        id: { in: coPromptIds },
+        isPublic: true,
+        status: 'approved',
+      },
     select: {
       id: true,
       title: true,
@@ -400,7 +408,14 @@ export default async function PromptDetailPage({ params }: { params: { id: strin
     getCurrentUser(),
   ]);
 
-  if (!prompt || prompt.is_public === false) {
+  if (!prompt) {
+    notFound();
+  }
+
+  if (
+    (prompt.is_public === false || prompt.status !== 'approved') &&
+    prompt.user_id !== currentUserId
+  ) {
     notFound();
   }
 
@@ -411,6 +426,17 @@ export default async function PromptDetailPage({ params }: { params: { id: strin
 
   // Normalize price to a number (0 if null)
   const price = prompt.price ?? 0;
+  const ownerStatusStyles: Record<string, string> = {
+    draft: "bg-slate-100 text-slate-800",
+    submitted: "bg-amber-100 text-amber-800",
+    approved: "bg-emerald-100 text-emerald-800",
+    rejected: "bg-red-100 text-red-800",
+    archived: "bg-slate-900 text-white",
+  };
+  const ownerStatusLabel =
+    prompt.status?.charAt(0).toUpperCase() + (prompt.status?.slice(1) ?? "");
+  const ownerStatusClass =
+    ownerStatusStyles[prompt.status ?? ""] ?? "bg-slate-100 text-slate-800";
 
   const currentUserId: string | undefined = currentUser?.id ?? undefined;
   const hasPurchased = await getHasPurchased(prompt.id, currentUserId);
@@ -423,11 +449,12 @@ export default async function PromptDetailPage({ params }: { params: { id: strin
   // Log a view (best-effort, does not block rendering meaningfully)
   await logPromptView(prompt.id, currentUserId);
 
-  const relatedPrompts = await prisma.prompt.findMany({
-    where: {
-      id: { not: prompt.id },
-      isPublic: true,
-      tags: {
+    const relatedPrompts = await prisma.prompt.findMany({
+      where: {
+        id: { not: prompt.id },
+        isPublic: true,
+        status: 'approved',
+        tags: {
         hasSome: prompt.tags ?? [],
       },
     },
@@ -510,11 +537,25 @@ export default async function PromptDetailPage({ params }: { params: { id: strin
               </div>
 
               {currentUserId && currentUserId === prompt.user_id && (
-                <div className="mt-2">
-                  <Button asChild variant="outline" size="sm">
-                    <Link href={`/creator/prompts/${prompt.id}/edit`}>Edit this prompt</Link>
-                  </Button>
-                </div>
+                <>
+                  <div className="mt-2 flex flex-wrap items-center gap-3 text-xs text-slate-600">
+                    <Badge
+                      className={`rounded-full px-3 py-1 text-xs font-semibold ${ownerStatusClass}`}
+                    >
+                      {ownerStatusLabel}
+                    </Badge>
+                    {prompt.moderation_note && (
+                      <span className="text-xs text-slate-500">
+                        Last note: {prompt.moderation_note}
+                      </span>
+                    )}
+                  </div>
+                  <div className="mt-2">
+                    <Button asChild variant="outline" size="sm">
+                      <Link href={`/creator/prompts/${prompt.id}/edit`}>Edit this prompt</Link>
+                    </Button>
+                  </div>
+                </>
               )}
 
               {prompt.tags && prompt.tags.length > 0 && (

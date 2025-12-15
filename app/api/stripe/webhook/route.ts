@@ -8,6 +8,7 @@ import { AppError, ErrorCategory, isOperationalError } from '@/lib/errors';
 import { logger } from '@/lib/logging';
 import { BusinessEventLogger } from '@/lib/middleware/api-handler';
 import { withRequestIdHeader } from '@/lib/api/request-id';
+import { recordSystemEvent } from '@/lib/system-events';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -292,6 +293,27 @@ async function upsertPurchaseFromStripe(
           'DATABASE_ERROR',
           'Failed to update purchase',
           { details: error.message }
+        );
+      }
+      try {
+        const adminClient =
+          supabaseAdmin ?? (await createSupabaseAdminClient().catch(() => null));
+        if (adminClient) {
+          await recordSystemEvent(adminClient, {
+            type: 'stripe/webhook',
+            requestId,
+            payloadSummary: verifiedEvent
+              ? { eventId: verifiedEvent.id, eventType: verifiedEvent.type }
+              : null,
+            errorMessage: error?.message ?? 'Webhook processing failed',
+          });
+        }
+      } catch (logError) {
+        logger.error(
+          'Failed to log webhook failure to system events',
+          { requestId },
+          logError as Error,
+          'SYSTEM_EVENT_WEBHOOK_LOG_FAILED'
         );
       }
 
@@ -842,6 +864,8 @@ async function processEvent(
 export async function POST(req: NextRequest) {
   const requestId = crypto.randomUUID();
   const startTime = Date.now();
+  let supabaseAdmin: SupabaseClient | null = null;
+  let verifiedEvent: Stripe.Event | null = null;
 
   try {
     const signature = req.headers.get('stripe-signature');
@@ -854,7 +878,9 @@ export async function POST(req: NextRequest) {
 
     const webhookHandler = getWebhookHandler();
     const event = webhookHandler.verifySignature(rawBody, signature, requestId);
+    verifiedEvent = event;
     const supabase = await createSupabaseAdminClient();
+    supabaseAdmin = supabase;
 
     const eventRecord = await recordStripeEvent(supabase, event, requestId);
     if (eventRecord.alreadyProcessed) {

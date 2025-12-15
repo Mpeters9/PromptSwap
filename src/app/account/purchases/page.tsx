@@ -40,7 +40,7 @@ export default function PurchasesPage() {
       <h1 className="text-3xl font-bold mb-6">Your Purchased Prompts</h1>
 
       {items.length === 0 && (
-        <p className="text-gray-500">You haven't bought anything yet.</p>
+        <p className="text-gray-500">You haven&apos;t bought anything yet.</p>
       )}
 
       <div className="grid gap-4">

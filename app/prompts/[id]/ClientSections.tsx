@@ -164,16 +164,24 @@ function RatingForm({ promptId, existingRatings, onNewRating }: RatingFormProps)
     setSubmitting(true);
     setError(null);
     try {
-      const { error: insertError } = await (supabase as any).from('prompt_ratings').insert([
-        {
-          prompt_id: promptId,
-          user_id: user.id,
+      const response = await fetch(`/api/prompts/${promptId}/rate`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
           rating,
           comment: comment.trim() || null,
-        } as any,
+        }),
+      });
+      const payload = await response.json();
+      if (!response.ok) {
+        throw new Error(payload?.error?.message || 'Failed to submit rating.');
+      }
+      onNewRating([
+        { user_id: user.id, rating, comment: comment.trim() || null, created_at: new Date().toISOString() },
+        ...existingRatings,
       ]);
-      if (insertError) throw insertError;
-      onNewRating([{ user_id: user.id, rating, comment: comment.trim() || null, created_at: new Date().toISOString() }, ...existingRatings]);
       setComment('');
     } catch (err: any) {
       setError(err.message ?? 'Failed to submit rating.');

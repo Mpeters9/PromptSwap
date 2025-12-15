@@ -73,7 +73,7 @@ export default async function DashboardPage() {
           >
             <p className="text-xs uppercase tracking-wide text-muted-foreground">Listings</p>
             <p className="mt-3 text-base font-semibold text-foreground">My prompts</p>
-            <p className="mt-2 text-xs text-muted-foreground">Manage what you're selling</p>
+            <p className="mt-2 text-xs text-muted-foreground">Manage what you&apos;re selling</p>
           </Link>
           <Link
             href="/chat"
@@ -131,7 +131,7 @@ export default async function DashboardPage() {
           {sessions.length === 0 ? (
             <div className="mt-6 rounded-xl border border-dashed border-border/60 bg-muted/40 p-6 text-sm text-muted-foreground">
               <p className="font-normal">
-                You don't have any chat sessions yet. Start a conversation to keep experimenting with prompts.
+                You don&apos;t have any chat sessions yet. Start a conversation to keep experimenting with prompts.
               </p>
             </div>
           ) : (

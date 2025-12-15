@@ -9,6 +9,7 @@ import {
   ErrorCodes 
 } from '@/lib/api/responses';
 import { createNotification } from '@/lib/notifications';
+import { enforceRateLimit, rateLimitResponse, RateLimitExceeded } from '@/lib/rate-limit';
 
 export const runtime = 'nodejs';
 
@@ -19,6 +20,24 @@ export async function POST(req: Request) {
     const user = await getCurrentUser();
     if (!user) {
       return NextResponse.json(createAuthErrorResponse(), { status: 401 });
+    }
+
+    const supabaseAdmin = await createSupabaseAdminClient();
+    try {
+      await enforceRateLimit({
+        request: req,
+        supabase: supabaseAdmin,
+        scope: 'swap:request',
+        limit: 5,
+        windowSeconds: 60,
+        userId: user.id,
+        requestId,
+      });
+    } catch (err) {
+      if (err instanceof RateLimitExceeded) {
+        return rateLimitResponse(err);
+      }
+      throw err;
     }
 
     // Parse and validate request body
@@ -67,13 +86,13 @@ export async function POST(req: Request) {
     // Verify that the prompts exist and are owned by the correct users
     const { data: requestedPrompt } = await supabase
       .from('prompts')
-      .select('id, user_id')
+      .select('id, user_id, status')
       .eq('id', requested_prompt_id)
       .single();
 
     const { data: offeredPrompt } = await supabase
       .from('prompts')
-      .select('id, user_id')
+      .select('id, user_id, status')
       .eq('id', offered_prompt_id)
       .single();
 
@@ -82,6 +101,13 @@ export async function POST(req: Request) {
         ErrorCodes.VALIDATION_ERROR,
         'One or both prompts do not exist'
       ), { status: 400 });
+    }
+
+    if (requestedPrompt.status !== 'approved' || offeredPrompt.status !== 'approved') {
+      return NextResponse.json(
+        createErrorResponse(ErrorCodes.INVALID_STATUS, 'Both prompts must be approved before swaps'),
+        { status: 400 }
+      );
     }
 
     if (requestedPrompt.user_id !== user.id) {
@@ -121,7 +147,6 @@ export async function POST(req: Request) {
     }
 
     try {
-      const supabaseAdmin = await createSupabaseAdminClient();
       await createNotification(supabaseAdmin, {
         userId: responder_id,
         type: 'swap.requested',

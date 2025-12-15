@@ -1,9 +1,9 @@
 // app/creator/prompts/new/page.tsx
+import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 
 import { getCurrentUser } from "@/lib/supabase-server";
-import { prisma } from "@/lib/prisma";
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -30,10 +30,9 @@ export default async function NewPromptPage() {
     const tagsRaw = (formData.get("tags") ?? "").toString();
     const priceRaw = (formData.get("price") ?? "").toString();
     const previewImage = (formData.get("preview_image") ?? "").toString().trim();
-    const isPublicRaw = formData.get("is_public");
+    const intent = (formData.get("intent") ?? "").toString();
 
     if (!title || !promptText) {
-      // In a real app you might add nicer validation feedback.
       throw new Error("Title and prompt text are required.");
     }
 
@@ -44,20 +43,45 @@ export default async function NewPromptPage() {
         .filter(Boolean) || [];
 
     const price = priceRaw ? parseFloat(priceRaw) : 0;
-    const isPublic = isPublicRaw === "on";
+    const status = intent === "draft" ? "draft" : "submitted";
 
-    const prompt = await prisma.prompt.create({
-      data: {
-        userId: userInner.id,
-        title,
-        description: description || null,
-        promptText,
-        tags,
-        price,
-        previewImage: previewImage || null,
-        isPublic,
+    const payload = {
+      title,
+      description: description || null,
+      category: null,
+      price,
+      prompt_text: promptText,
+      tags,
+      preview_image: previewImage || null,
+      version: 1,
+      status,
+    };
+
+    const cookieHeader = cookies()
+      .getAll()
+      .map((cookie) => `${cookie.name}=${cookie.value}`)
+      .join("; ");
+
+    const endpoint = new URL(
+      "/api/prompts/create",
+      process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000"
+    );
+
+    const response = await fetch(endpoint.toString(), {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...(cookieHeader ? { cookie: cookieHeader } : {}),
       },
+      body: JSON.stringify(payload),
+      cache: "no-store",
     });
+
+    const result = await response.json().catch(() => null);
+
+    if (!response.ok || !result?.data?.promptId) {
+      throw new Error(result?.error?.message || "Failed to create prompt");
+    }
 
     revalidatePath("/creator/prompts");
     revalidatePath("/prompts");
@@ -139,7 +163,12 @@ export default async function NewPromptPage() {
             </div>
 
             <div className="flex justify-end gap-2 pt-2">
-              <Button type="submit">Create prompt</Button>
+              <Button type="submit" name="intent" value="draft">
+                Save as draft
+              </Button>
+              <Button type="submit" name="intent" value="submitted">
+                Submit for review
+              </Button>
             </div>
           </form>
         </CardContent>

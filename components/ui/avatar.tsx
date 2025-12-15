@@ -20,10 +20,12 @@ export function Avatar({ className, ...props }: AvatarProps) {
 export interface AvatarImageProps
   extends React.ImgHTMLAttributes<HTMLImageElement> {}
 
-export function AvatarImage({ className, ...props }: AvatarImageProps) {
+export function AvatarImage({ className, alt = "", ...props }: AvatarImageProps) {
   return (
+    // eslint-disable-next-line @next/next/no-img-element
     <img
       className={cn("h-full w-full object-cover", className)}
+      alt={alt}
       {...props}
     />
   );

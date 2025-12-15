@@ -1,5 +1,7 @@
 'use client';
 
+/* eslint-disable react-hooks/exhaustive-deps */
+
 import { useEffect, useState } from 'react';
 
 import { supabase } from '@/lib/supabase';
@@ -23,6 +25,7 @@ export default function PromptComments({ promptId }: Props) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  /* eslint-disable-next-line react-hooks/exhaustive-deps */
   useEffect(() => {
     void fetchComments();
   }, [promptId]);

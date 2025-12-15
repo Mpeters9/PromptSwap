@@ -7,11 +7,12 @@
   },
   "scripts": {
     "dev": "next dev",
-    "build": "next build",
+    "build": "prisma generate && next build",
     "start": "next start",
-    "lint": "next lint",
-    "vercel-build": "prisma generate && next build",
+    "lint": "eslint --cache --ext .ts,.tsx,.js,.jsx,.mjs app components lib src tests scripts",
+    "vercel-build": "npm run build",
     "db:test": "node scripts/db-smoke-test.mjs",
+    "smoke": "node scripts/smoke.mjs",
     "test": "vitest run"
   },
   "dependencies": {
@@ -36,6 +37,8 @@
     "@types/node": "^20",
     "@types/react": "^18.2.0",
     "@types/react-dom": "^18.2.0",
+    "@typescript-eslint/eslint-plugin": "^6.21.0",
+    "@typescript-eslint/parser": "^6.21.0",
     "autoprefixer": "^10.4.16",
     "dotenv": "^16.5.1",
     "eslint": "^8.56.0",

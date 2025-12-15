@@ -130,35 +130,44 @@ export default function UploadPage() {
     }
 
     setStatus('Saving prompt...');
-    const { data: result, error: insertError } = await (supabase as any)
-      .from('prompts')
-      .insert([
-        {
-          user_id: user.id,
-          title: form.title.trim(),
-          description: form.description.trim() || null,
-          tags: tagList.length ? tagList : null,
-          price: priceValue,
-          prompt_text: form.promptText.trim(),
-          preview_image: previewUrl,
-          is_public: false,
-        } as any,
-      ])
-      .select()
-      .single();
 
-    if (!result || insertError) {
-      setError(`Failed to save prompt: ${insertError?.message || 'Unknown error'}`);
+    const payload = {
+      title: form.title.trim(),
+      description: form.description.trim() || null,
+      category: null,
+      price: priceValue,
+      prompt_text: form.promptText.trim(),
+      tags: tagList.length ? tagList : null,
+      preview_image: previewUrl,
+      version: 1,
+      status: 'submitted',
+    };
+
+    const response = await fetch('/api/prompts/create', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(payload),
+    });
+
+    const payloadResult = await response.json();
+    if (!response.ok || !payloadResult?.data?.promptId) {
+      const errorMessage =
+        payloadResult?.error?.message || payloadResult?.message || 'Unknown error';
+      setError(`Failed to save prompt: ${errorMessage}`);
       setSubmitting(false);
       setStatus(null);
       return;
     }
 
+    const promptId = payloadResult.data.promptId;
+
     // Upload prompt file to storage
     const promptTextFile = new Blob([form.promptText.trim()], { type: 'text/plain' });
     const { error: uploadPromptError } = await supabase.storage
       .from('prompts')
-      .upload(`${result.id}.txt`, promptTextFile, {
+      .upload(`${promptId}.txt`, promptTextFile, {
         upsert: true,
       });
 
@@ -170,7 +179,7 @@ export default function UploadPage() {
     }
 
     setStatus('Prompt created! Redirecting...');
-    router.push(`/prompts/${result.id}`);
+    router.push(`/prompts/${promptId}`);
   };
 
   if (!loading && !user) {

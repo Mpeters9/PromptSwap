@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { createSupabaseServerClient, getCurrentUser } from '@/lib/supabase/server';
+import { createSupabaseServerClient, createSupabaseAdminClient, getCurrentUser } from '@/lib/supabase/server';
 import { ratePromptSchema } from '@/lib/validation/schemas';
 import { 
   createSuccessResponse, 
@@ -9,6 +9,7 @@ import {
   createNotFoundErrorResponse,
   ErrorCodes 
 } from '@/lib/api/responses';
+import { enforceRateLimit, rateLimitResponse, RateLimitExceeded } from '@/lib/rate-limit';
 
 export const runtime = 'nodejs';
 
@@ -52,12 +53,36 @@ export async function POST(
     // Check if prompt exists
     const { data: prompt, error: promptError } = await supabase
       .from('prompts')
-      .select('id')
+      .select('id, status, user_id, price')
       .eq('id', promptId)
       .single();
 
     if (promptError || !prompt) {
       return NextResponse.json(createNotFoundErrorResponse('Prompt'), { status: 404 });
+    }
+
+    if (prompt?.status !== 'approved') {
+      return NextResponse.json(
+        createErrorResponse(ErrorCodes.INVALID_STATUS, 'Prompt is not available for rating'),
+        { status: 400 }
+      );
+    }
+
+    const supabaseAdmin = await createSupabaseAdminClient();
+    try {
+      await enforceRateLimit({
+        request: req,
+        supabase: supabaseAdmin,
+        scope: 'prompt:rate',
+        limit: 5,
+        windowSeconds: 60,
+        userId: user.id,
+      });
+    } catch (err) {
+      if (err instanceof RateLimitExceeded) {
+        return rateLimitResponse(err);
+      }
+      throw err;
     }
 
     // Check if user already rated this prompt
@@ -148,4 +173,3 @@ export async function POST(
     ), { status: 500 });
   }
 }
-

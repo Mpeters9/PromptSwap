@@ -50,6 +50,7 @@ export const ErrorCodes = {
   SWAP_NOT_FOUND: 'SWAP_NOT_FOUND',
   INVALID_STATUS: 'INVALID_STATUS',
   COPY_FAILED: 'COPY_FAILED',
+  TOO_MANY_REQUESTS: 'TOO_MANY_REQUESTS',
 } as const;
 
 export type ErrorCode = typeof ErrorCodes[keyof typeof ErrorCodes];
@@ -122,4 +123,3 @@ export function isErrorResponse<T>(response: ApiResponse<T>): response is ErrorR
 export function isSuccessResponse<T>(response: ApiResponse<T>): response is SuccessResponse<T> {
   return response.ok;
 }
-

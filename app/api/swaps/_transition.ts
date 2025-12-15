@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { createSupabaseAdminClient, getCurrentUser } from '@/lib/supabase/server';
 import { transitionSwap, SwapAction } from '@/lib/swaps/state';
 import { createAuthErrorResponse, createErrorResponse, createSuccessResponse, ErrorCodes } from '@/lib/api/responses';
-import { createNotification, notifyMany } from '@/lib/notifications';
+import { emitSwapNotifications } from '@/lib/swaps/notifications';
 
 export async function handleSwapAction(request: Request, swapId: string, action: SwapAction) {
   const user = await getCurrentUser();
@@ -77,51 +77,5 @@ async function copyPromptsBetweenUsers(supabase: any, swap: { requested_prompt_i
 
   if (insertError) {
     throw insertError;
-  }
-}
-
-async function emitSwapNotifications(
-  supabase: any,
-  action: SwapAction,
-  swap: { requester_id: string; responder_id: string },
-  requestId: string
-) {
-  const url = '/swaps';
-
-  try {
-    if (action === 'accept') {
-      await createNotification(supabase, {
-        userId: swap.requester_id,
-        type: 'swap.accepted',
-        title: 'Swap accepted',
-        body: 'Your swap request was accepted.',
-        url,
-        requestId,
-      });
-    } else if (action === 'decline') {
-      await createNotification(supabase, {
-        userId: swap.requester_id,
-        type: 'swap.declined',
-        title: 'Swap declined',
-        body: 'Your swap request was declined.',
-        url,
-        requestId,
-      });
-    } else if (action === 'fulfill') {
-      await notifyMany(
-        supabase,
-        [swap.requester_id, swap.responder_id],
-        {
-          type: 'swap.fulfilled',
-          title: 'Swap fulfilled',
-          body: 'Your swap has been fulfilled. Check your prompts.',
-          url,
-          requestId,
-        }
-      );
-    }
-  } catch (error) {
-    // Notification failures should not block swap state changes
-    console.error('Failed to emit swap notifications', error);
   }
 }

@@ -100,9 +100,9 @@ export default async function HomePage() {
             <article className="flex flex-col gap-2 rounded-2xl border border-border/70 bg-background/40 p-4">
               <p className="text-xs uppercase tracking-wide text-muted-foreground">Support</p>
               <p className="text-3xl font-bold text-foreground">Human-first</p>
-              <p className="text-sm text-muted-foreground">
-                We're in your corner if prompts need support or tuning.
-              </p>
+            <p className="text-sm text-muted-foreground">
+              We&apos;re in your corner if prompts need support or tuning.
+            </p>
             </article>
           </div>
         </section>

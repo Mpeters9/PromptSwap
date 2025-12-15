@@ -12,6 +12,7 @@ import {
   createServerErrorResponse,
   ErrorCodes,
 } from '@/lib/api/responses';
+import { enforceRateLimit, rateLimitResponse, RateLimitExceeded } from '@/lib/rate-limit';
 
 export async function POST(request: NextRequest) {
   try {
@@ -20,6 +21,24 @@ export async function POST(request: NextRequest) {
     const user = await getCurrentUser();
     if (!user) {
       return NextResponse.json(createAuthErrorResponse(), { status: 401 });
+    }
+
+    const supabaseAdminClient = await createSupabaseAdminClient();
+    try {
+      await enforceRateLimit({
+        request,
+        supabase: supabaseAdminClient,
+        scope: 'refund:request',
+        limit: 3,
+        windowSeconds: 60 * 60,
+        userId: user.id,
+        requestId,
+      });
+    } catch (err) {
+      if (err instanceof RateLimitExceeded) {
+        return rateLimitResponse(err);
+      }
+      throw err;
     }
 
     // Parse and validate request body
@@ -176,8 +195,7 @@ export async function POST(request: NextRequest) {
     }
 
     try {
-      const supabaseAdmin = await createSupabaseAdminClient();
-      await notifyAdmins(supabaseAdmin, {
+      await notifyAdmins(supabaseAdminClient, {
         type: 'refund.requested',
         title: 'Refund request submitted',
         body: `A refund was requested for purchase ${purchaseId}.`,

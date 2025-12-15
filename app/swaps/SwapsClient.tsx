@@ -1,5 +1,7 @@
 'use client';
 
+/* eslint-disable react-hooks/exhaustive-deps */
+
 import { useEffect, useMemo, useState } from 'react';
 
 
@@ -40,6 +42,7 @@ export default function SwapsClient() {
   const [error, setError] = useState<string | null>(null);
   const [confirm, setConfirm] = useState<{ id: string; action: 'accept' | 'decline' | 'cancel' | 'fulfill' } | null>(null);
 
+  /* eslint-disable-next-line react-hooks/exhaustive-deps */
   useEffect(() => {
     if (!loading && user) {
       void fetchSwaps();

@@ -66,6 +66,16 @@ export default async function CreatorPromptsPage() {
   const totalViews = Array.from(viewsCountByPromptId.values()).reduce((sum, n) => sum + n, 0);
 
   const topPrompt = topPromptId ? prompts.find((p) => p.id === topPromptId) : null;
+  const statusStyles: Record<
+    string,
+    { label: string; className: string }
+  > = {
+    draft: { label: 'Draft', className: 'bg-slate-100 text-slate-800' },
+    submitted: { label: 'Submitted', className: 'bg-amber-100 text-amber-800' },
+    approved: { label: 'Approved', className: 'bg-emerald-100 text-emerald-800' },
+    rejected: { label: 'Rejected', className: 'bg-red-100 text-red-800' },
+    archived: { label: 'Archived', className: 'bg-slate-900 text-white' },
+  };
 
   return (
     <main className="min-h-screen bg-background">
@@ -136,6 +146,7 @@ export default async function CreatorPromptsPage() {
                 <tr>
                   <th className="px-4 py-2 text-left">Title</th>
                   <th className="px-4 py-2 text-left">Price</th>
+                  <th className="px-4 py-2 text-left">Status</th>
                   <th className="px-4 py-2 text-left">Sales</th>
                   <th className="px-4 py-2 text-left">Views</th>
                   <th className="px-4 py-2 text-left">Created</th>
@@ -171,7 +182,20 @@ export default async function CreatorPromptsPage() {
                           {prompt.description}
                         </p>
                       </td>
-                      <td className="px-4 py-3">{priceDisplay}</td>
+                      <td className="px-4 py-3">
+                        <div className="flex flex-col gap-1">
+                          <Badge
+                            className={`rounded-full px-3 py-1 text-xs font-semibold ${
+                              statusStyles[prompt.status]?.className ?? 'bg-slate-100 text-slate-800'
+                            }`}
+                          >
+                            {statusStyles[prompt.status]?.label ?? prompt.status}
+                          </Badge>
+                          {prompt.moderationNote && (
+                            <p className="text-xs text-muted-foreground">Last note: {prompt.moderationNote}</p>
+                          )}
+                        </div>
+                      </td>
                       <td className="px-4 py-3">{salesCount}</td>
                       <td className="px-4 py-3">{viewsCount}</td>
                       <td className="px-4 py-3 text-muted-foreground">
@@ -210,4 +234,3 @@ export default async function CreatorPromptsPage() {
     </main>
   );
 }
-

@@ -1,86 +1,59 @@
 import type { NextRequest } from 'next/server';
 import { NextResponse } from 'next/server';
-import { createClient } from '@supabase/supabase-js';
-import type { GenericSupabaseClient } from '@/lib/supabase-types';
 import { adminModerationSchema } from '@/lib/validation/schemas';
 import { createSuccessResponse, createErrorResponse } from '@/lib/api/responses';
+import { assertAdminAccess, getAdminUser, requireAdminSupabaseClient } from '@/lib/admin/auth';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-type AdminProfileRow = { is_admin: boolean };
-
-function getSupabaseAdmin(): GenericSupabaseClient | null {
-  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL?.trim();
-  const supabaseServiceKey = process.env.NEXT_PRIVATE_SUPABASE_SERVICE_ROLE_KEY?.trim();
-
-  if (!supabaseUrl || !supabaseServiceKey) {
-    return null;
+async function authenticateAdmin(req: NextRequest) {
+  let supabaseAdmin;
+  try {
+    supabaseAdmin = requireAdminSupabaseClient();
+  } catch (err: any) {
+    return { error: 'SERVER_ERROR' as const };
   }
 
-  return createClient(supabaseUrl, supabaseServiceKey) as GenericSupabaseClient;
-}
-
-function getToken(req: NextRequest) {
-  const authHeader = req.headers.get('authorization');
-  if (!authHeader) return null;
-  return authHeader.replace('Bearer ', '').trim();
-}
-
-async function getUser(req: NextRequest, supabaseAdmin: GenericSupabaseClient) {
-  const token = getToken(req);
-  if (!token) return null;
-  const { data, error } = await supabaseAdmin.auth.getUser(token);
-  if (error || !data?.user) return null;
-  return data.user;
-}
-
-async function assertAdmin(userId: string, supabaseAdmin: GenericSupabaseClient) {
-  const { data: profile, error } = await supabaseAdmin
-    .from('profiles')
-    .select('is_admin')
-    .eq('id', userId)
-    .single<AdminProfileRow>();
-  if (error) throw error;
-
-  if (!profile?.is_admin) {
-    throw new Error('Forbidden');
-  }
-}
-
-export async function GET(req: NextRequest) {
-  const supabaseAdmin = getSupabaseAdmin();
-  if (!supabaseAdmin) {
-    return NextResponse.json(
-      createErrorResponse('SERVER_ERROR', 'Server misconfigured: Supabase URL and service role key are required for admin routes.'),
-      { status: 500 },
-    );
-  }
-
-  const user = await getUser(req, supabaseAdmin);
+  const user = await getAdminUser(req, supabaseAdmin);
   if (!user) {
-    return NextResponse.json(
-      createErrorResponse('UNAUTHORIZED', 'Authentication required'),
-      { status: 401 }
-    );
+    return { error: 'UNAUTHORIZED' as const, supabaseAdmin };
   }
 
   try {
-    await assertAdmin(user.id, supabaseAdmin);
+    await assertAdminAccess(user.id, supabaseAdmin);
   } catch (err: any) {
-    const status = err.message === 'Forbidden' ? 403 : 500;
+    return {
+      error: err.message === 'Forbidden' ? 'FORBIDDEN' as const : 'SERVER_ERROR' as const,
+      supabaseAdmin,
+    };
+  }
+
+  return { supabaseAdmin, user };
+}
+
+export async function GET(req: NextRequest) {
+  const auth = await authenticateAdmin(req);
+  if (auth.error) {
+    if (auth.error === 'UNAUTHORIZED') {
+      return NextResponse.json(createErrorResponse('UNAUTHORIZED', 'Authentication required'), { status: 401 });
+    }
+    if (auth.error === 'FORBIDDEN') {
+      return NextResponse.json(createErrorResponse('FORBIDDEN', 'Admin access required'), { status: 403 });
+    }
     return NextResponse.json(
-      createErrorResponse('FORBIDDEN', err.message ?? 'Admin access required'),
-      { status }
+      createErrorResponse('SERVER_ERROR', 'Server misconfigured: Supabase URL and service role key are required for admin routes.'),
+      { status: 500 }
     );
   }
 
+  const { supabaseAdmin } = auth;
   try {
     const [pendingRes, txRes, flaggedRes] = await Promise.all([
       supabaseAdmin
         .from('prompts')
-        .select('id, title, user_id, created_at, price, is_public')
-        .eq('is_public', false)
+        .select('id, title, user_id, created_at, price, status, moderation_note')
+        .eq('status', 'submitted')
         .order('created_at', { ascending: false })
         .limit(50),
       supabaseAdmin
@@ -99,7 +72,6 @@ export async function GET(req: NextRequest) {
     if (pendingRes.error) throw pendingRes.error;
     if (txRes.error) throw txRes.error;
     if (flaggedRes.error) {
-      // If flagged table unavailable, continue gracefully.
       console.warn('Flagged fetch error', flaggedRes.error);
     }
 
@@ -119,44 +91,29 @@ export async function GET(req: NextRequest) {
 }
 
 export async function POST(req: NextRequest) {
-  const supabaseAdmin = getSupabaseAdmin();
-  if (!supabaseAdmin) {
+  const auth = await authenticateAdmin(req);
+  if (auth.error) {
+    if (auth.error === 'UNAUTHORIZED') {
+      return NextResponse.json(createErrorResponse('UNAUTHORIZED', 'Authentication required'), { status: 401 });
+    }
+    if (auth.error === 'FORBIDDEN') {
+      return NextResponse.json(createErrorResponse('FORBIDDEN', 'Admin access required'), { status: 403 });
+    }
     return NextResponse.json(
       createErrorResponse('SERVER_ERROR', 'Server misconfigured: Supabase URL and service role key are required for admin routes.'),
-      { status: 500 },
+      { status: 500 }
     );
   }
 
-  const user = await getUser(req, supabaseAdmin);
-  if (!user) {
-    return NextResponse.json(
-      createErrorResponse('UNAUTHORIZED', 'Authentication required'),
-      { status: 401 }
-    );
-  }
+  const { supabaseAdmin, user } = auth;
 
-  try {
-    await assertAdmin(user.id, supabaseAdmin);
-  } catch (err: any) {
-    const status = err.message === 'Forbidden' ? 403 : 500;
-    return NextResponse.json(
-      createErrorResponse('FORBIDDEN', err.message ?? 'Admin access required'),
-      { status }
-    );
-  }
-
-  // Parse and validate request body
   let body: any;
   try {
     body = await req.json();
   } catch {
-    return NextResponse.json(
-      createErrorResponse('INVALID_JSON', 'Invalid JSON in request body'),
-      { status: 400 }
-    );
+    return NextResponse.json(createErrorResponse('INVALID_JSON', 'Invalid JSON in request body'), { status: 400 });
   }
 
-  // Validate input using Zod schema
   const validation = adminModerationSchema.safeParse(body);
   if (!validation.success) {
     return NextResponse.json(
@@ -165,45 +122,85 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  const { action, promptId, userId } = validation.data;
+  const { action, promptId, userId, reason } = validation.data;
+  const normalizedReason = reason?.trim() || null;
 
   try {
     if (action === 'approve' && promptId) {
       const { error } = await supabaseAdmin
         .from('prompts')
-        .update({ is_public: true })
+        .update({
+          is_public: true,
+          status: 'approved',
+          moderation_note: normalizedReason,
+        })
         .eq('id', promptId);
+
       if (error) throw error;
-      
-      return NextResponse.json(
-        createSuccessResponse({ message: 'Prompt approved successfully', promptId })
-      );
+
+      await supabaseAdmin.from('moderation_actions').insert({
+        prompt_id: promptId,
+        admin_id: user.id,
+        action,
+        reason: normalizedReason,
+      });
+
+      return NextResponse.json(createSuccessResponse({ message: 'Prompt approved successfully', promptId }));
     } else if (action === 'reject' && promptId) {
       const { error } = await supabaseAdmin
         .from('prompts')
-        .update({ is_public: false })
+        .update({
+          is_public: false,
+          status: 'rejected',
+          moderation_note: normalizedReason,
+        })
         .eq('id', promptId);
+
       if (error) throw error;
-      
-      return NextResponse.json(
-        createSuccessResponse({ message: 'Prompt rejected successfully', promptId })
-      );
+
+      await supabaseAdmin.from('moderation_actions').insert({
+        prompt_id: promptId,
+        admin_id: user.id,
+        action,
+        reason: normalizedReason,
+      });
+
+      return NextResponse.json(createSuccessResponse({ message: 'Prompt rejected successfully', promptId }));
+    } else if (action === 'archive' && promptId) {
+      const { error } = await supabaseAdmin
+        .from('prompts')
+        .update({
+          is_public: false,
+          status: 'archived',
+          moderation_note: normalizedReason,
+        })
+        .eq('id', promptId);
+
+      if (error) throw error;
+
+      await supabaseAdmin.from('moderation_actions').insert({
+        prompt_id: promptId,
+        admin_id: user.id,
+        action,
+        reason: normalizedReason,
+      });
+
+      return NextResponse.json(createSuccessResponse({ message: 'Prompt archived successfully', promptId }));
     } else if (action === 'ban' && userId) {
       const { error } = await supabaseAdmin
         .from('profiles')
         .update({ is_banned: true })
         .eq('id', userId);
+
       if (error) throw error;
-      
-      return NextResponse.json(
-        createSuccessResponse({ message: 'User banned successfully', userId })
-      );
-    } else {
-      return NextResponse.json(
-        createErrorResponse('INVALID_ACTION', 'Unsupported action or missing required parameters'),
-        { status: 400 }
-      );
+
+      return NextResponse.json(createSuccessResponse({ message: 'User banned successfully', userId }));
     }
+
+    return NextResponse.json(
+      createErrorResponse('INVALID_ACTION', 'Unsupported action or missing required parameters'),
+      { status: 400 }
+    );
   } catch (err: any) {
     return NextResponse.json(
       createErrorResponse('DATABASE_ERROR', err.message ?? 'Failed to process action'),
