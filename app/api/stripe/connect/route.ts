@@ -1,6 +1,7 @@
 import { NextResponse, type NextRequest } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import Stripe from 'stripe';
+import { getRequestId, withRequestIdHeader } from '@/lib/api/request-id';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -51,23 +52,24 @@ function extractToken(req: NextRequest) {
  * Generates a Stripe OAuth onboarding link for the given user_id.
  */
 export async function POST(req: NextRequest) {
+  const requestId = getRequestId(req);
   try {
     if (!clientId) {
-      return NextResponse.json({ error: 'Stripe client ID not configured.' }, { status: 400 });
+      return withRequestIdHeader(NextResponse.json({ error: 'Stripe client ID not configured.' }, { status: 400 }), requestId);
     }
 
     const { user_id } = ((await req.json().catch(() => ({}))) as ConnectBody) ?? {};
     if (!user_id) {
-      return NextResponse.json({ error: 'user_id is required' }, { status: 400 });
+      return withRequestIdHeader(NextResponse.json({ error: 'user_id is required' }, { status: 400 }), requestId);
     }
 
     const token = extractToken(req);
     if (!token) {
-      return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
+      return withRequestIdHeader(NextResponse.json({ error: 'unauthorized' }, { status: 401 }), requestId);
     }
     const { data: userData, error: userError } = await supabaseAdmin.auth.getUser(token);
     if (userError || userData?.user?.id !== user_id) {
-      return NextResponse.json({ error: 'forbidden' }, { status: 403 });
+      return withRequestIdHeader(NextResponse.json({ error: 'forbidden' }, { status: 403 }), requestId);
     }
 
     const redirectUri = `${siteUrl}/api/stripe/connect`;
@@ -78,10 +80,10 @@ export async function POST(req: NextRequest) {
     url.searchParams.set('redirect_uri', redirectUri);
     url.searchParams.set('state', user_id);
 
-    return NextResponse.json({ url: url.toString() });
+    return withRequestIdHeader(NextResponse.json({ url: url.toString() }), requestId);
   } catch (err: any) {
     console.error('Stripe connect link failed', err);
-    return NextResponse.json({ error: 'Failed to create connect link' }, { status: 500 });
+    return withRequestIdHeader(NextResponse.json({ error: 'Failed to create connect link' }, { status: 500 }), requestId);
   }
 }
 
@@ -91,6 +93,7 @@ export async function POST(req: NextRequest) {
  * and stores it on the user's profile in Supabase.
  */
 export async function GET(req: NextRequest) {
+  const requestId = getRequestId(req);
   const code = req.nextUrl.searchParams.get('code');
   const state = req.nextUrl.searchParams.get('state'); // we set this to user_id
   const errorParam = req.nextUrl.searchParams.get('error');
@@ -99,10 +102,10 @@ export async function GET(req: NextRequest) {
   // If no code yet, generate an onboarding link and redirect the user to Stripe.
   if (!code) {
     if (!clientId) {
-      return NextResponse.json({ error: 'Stripe client ID not configured.' }, { status: 400 });
+      return withRequestIdHeader(NextResponse.json({ error: 'Stripe client ID not configured.' }, { status: 400 }), requestId);
     }
     if (!queryUserId) {
-      return NextResponse.json({ error: 'user_id is required to start onboarding.' }, { status: 400 });
+      return withRequestIdHeader(NextResponse.json({ error: 'user_id is required to start onboarding.' }, { status: 400 }), requestId);
     }
 
     const redirectUri = `${siteUrl}/api/stripe/connect`;
@@ -113,7 +116,8 @@ export async function GET(req: NextRequest) {
     url.searchParams.set('redirect_uri', redirectUri);
     url.searchParams.set('state', queryUserId);
 
-    return NextResponse.redirect(url.toString());
+    const res = NextResponse.redirect(url.toString());
+    return withRequestIdHeader(res, requestId);
   }
 
   if (errorParam) {
@@ -122,7 +126,7 @@ export async function GET(req: NextRequest) {
   }
 
   if (!code || !state) {
-    return NextResponse.json({ error: 'Missing code or state' }, { status: 400 });
+    return withRequestIdHeader(NextResponse.json({ error: 'Missing code or state' }, { status: 400 }), requestId);
   }
 
   try {
@@ -131,7 +135,7 @@ export async function GET(req: NextRequest) {
     if (token) {
       const { data: userData } = await supabaseAdmin.auth.getUser(token);
       if (userData?.user?.id && userData.user.id !== state) {
-        return NextResponse.json({ error: 'forbidden' }, { status: 403 });
+        return withRequestIdHeader(NextResponse.json({ error: 'forbidden' }, { status: 403 }), requestId);
       }
     }
 
@@ -142,7 +146,7 @@ export async function GET(req: NextRequest) {
 
     const accountId = tokenResponse.stripe_user_id;
     if (!accountId) {
-      return NextResponse.json({ error: 'No account_id returned from Stripe' }, { status: 500 });
+      return withRequestIdHeader(NextResponse.json({ error: 'No account_id returned from Stripe' }, { status: 500 }), requestId);
     }
 
     const { error: updateError } = await supabaseAdmin
@@ -152,12 +156,12 @@ export async function GET(req: NextRequest) {
 
     if (updateError) {
       console.error('Failed to store Stripe account ID', updateError);
-      return NextResponse.json({ error: updateError.message }, { status: 500 });
+      return withRequestIdHeader(NextResponse.json({ error: updateError.message }, { status: 500 }), requestId);
     }
 
-    return NextResponse.json({ success: true, account_id: accountId });
+    return withRequestIdHeader(NextResponse.json({ success: true, account_id: accountId }), requestId);
   } catch (err: any) {
     console.error('Stripe OAuth exchange failed', err);
-    return NextResponse.json({ error: err?.message || 'Stripe OAuth failed' }, { status: 500 });
+    return withRequestIdHeader(NextResponse.json({ error: err?.message || 'Stripe OAuth failed' }, { status: 500 }), requestId);
   }
 }

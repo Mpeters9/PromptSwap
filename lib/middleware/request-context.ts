@@ -2,6 +2,7 @@
 
 import { NextRequest } from 'next/server';
 import { RequestContext, setRequestContext, clearRequestContext, generateCorrelationId } from '@/lib/logging';
+import { withRequestIdHeader } from '@/lib/api/request-id';
 
 // Extract request metadata
 function extractRequestMetadata(request: NextRequest) {
@@ -18,7 +19,8 @@ function extractRequestMetadata(request: NextRequest) {
 
 // Create request context from Next.js request
 export function createRequestContext(request: NextRequest): RequestContext {
-  const requestId = generateCorrelationId();
+  const incomingId = request.headers.get('x-request-id');
+  const requestId = incomingId && incomingId.trim().length > 0 ? incomingId.trim() : generateCorrelationId();
   const correlationId = generateCorrelationId();
   const { userAgent, ip, userId } = extractRequestMetadata(request);
   
@@ -47,7 +49,11 @@ export function withRequestContext<R>(
       
       // Call the original handler
       const result = await handler(request, context);
-      
+
+      if (result instanceof Response) {
+        return withRequestIdHeader(result, requestContext.requestId) as any;
+      }
+
       return result;
     } finally {
       // Always clean up request context
@@ -90,4 +96,3 @@ export function withErrorHandling<R>(
     }
   });
 }
-

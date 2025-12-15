@@ -3,6 +3,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { withErrorHandling, withRequestContext } from '@/lib/middleware/request-context';
 import { businessLogger, logger } from '@/lib/logging';
+import { getRequestId, withRequestIdHeader } from '@/lib/api/request-id';
+import { reportError } from '@/lib/observability/reportError';
 
 import { 
   ApiResponse, 
@@ -39,7 +41,7 @@ export function createApiHandler(
 ) {
   return withErrorHandling(async (request, context) => {
     const startTime = Date.now();
-    const requestId = Date.now().toString();
+    const requestId = getRequestId(request);
     
     try {
       // Log incoming request
@@ -48,10 +50,14 @@ export function createApiHandler(
         method: request.method,
         userAgent: request.headers.get('user-agent'),
         ip: request.headers.get('x-forwarded-for'),
+        requestId,
       }, 'API_REQUEST_START');
       
       // Call the actual handler
       const response = await handler(request, context);
+      if (response instanceof Response) {
+        withRequestIdHeader(response, requestId);
+      }
       
       // Log successful response
       const duration = Date.now() - startTime;
@@ -59,6 +65,7 @@ export function createApiHandler(
         status: response.status,
         duration,
         path: request.nextUrl.pathname,
+        requestId,
       }, 'API_REQUEST_SUCCESS');
       
       return response;
@@ -71,16 +78,18 @@ export function createApiHandler(
         duration,
         path: request.nextUrl.pathname,
         method: request.method,
+        requestId,
       }, error as Error, 'API_REQUEST_ERROR');
+      void reportError(error, { requestId, path: request.nextUrl.pathname });
       
       // Convert error and return appropriate response
-      return handleErrorResponse(error, request);
+      return handleErrorResponse(error, request, requestId);
     }
   });
 }
 
 // Handle error conversion and response formatting
-function handleErrorResponse(error: unknown, request: NextRequest): NextResponse<ApiResponse> {
+function handleErrorResponse(error: unknown, request: NextRequest, requestId?: string): NextResponse<ApiResponse> {
   // Convert to AppError
   const appError = toAppError(error);
   
@@ -105,7 +114,9 @@ function handleErrorResponse(error: unknown, request: NextRequest): NextResponse
     );
   }
   
-  return NextResponse.json(errorResponse, { status: statusCode });
+  const res = NextResponse.json(errorResponse, { status: statusCode });
+  if (requestId) res.headers.set('x-request-id', requestId);
+  return res;
 }
 
 // Create validated API handler
@@ -114,6 +125,7 @@ export function createValidatedApiHandler<R>(
   schema: z.ZodSchema<R>
 ): ApiHandler {
   return withRequestContext(async (request, context) => {
+    const requestId = getRequestId(request);
     // Parse and validate request body
     let validatedData: R;
     
@@ -124,6 +136,7 @@ export function createValidatedApiHandler<R>(
       logger.info('Request validated successfully', {
         path: request.nextUrl.pathname,
         method: request.method,
+        requestId,
       }, 'VALIDATION_SUCCESS');
       
 
@@ -280,4 +293,3 @@ export const Responses = {
   internalError: (error?: any) =>
     NextResponse.json(createErrorResponse(ErrorCodes.INTERNAL_ERROR, 'Internal server error'), { status: 500 }),
 };
-

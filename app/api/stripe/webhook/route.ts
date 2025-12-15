@@ -7,6 +7,7 @@ import { createNotification } from '@/lib/notifications';
 import { AppError, ErrorCategory, isOperationalError } from '@/lib/errors';
 import { logger } from '@/lib/logging';
 import { BusinessEventLogger } from '@/lib/middleware/api-handler';
+import { withRequestIdHeader } from '@/lib/api/request-id';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -727,6 +728,46 @@ async function handleDisputeCreated(
   }, STRIPE_HANDLER_LABELS.disputeCreated);
 }
 
+async function handleAccountUpdated(
+  supabase: SupabaseClient,
+  account: Stripe.Account,
+  eventId: string,
+  requestId: string
+) {
+  const chargesEnabled = Boolean(account.charges_enabled);
+  const payoutsEnabled = Boolean(account.payouts_enabled);
+  const status = account.requirements?.disabled_reason || null;
+
+  const { error } = await supabase
+    .from('profiles')
+    .update({
+      stripe_charges_enabled: chargesEnabled,
+      stripe_payouts_enabled: payoutsEnabled,
+      stripe_account_status: status,
+      stripe_account_id: account.id,
+      connected_account_id: account.id,
+    })
+    .eq('stripe_account_id', account.id);
+
+  if (error) {
+    throw new AppError(
+      ErrorCategory.EXTERNAL,
+      'DATABASE_ERROR',
+      'Failed to update Stripe account status',
+      { details: error.message },
+      500
+    );
+  }
+
+  logger.info('Stripe account updated', {
+    requestId,
+    accountId: account.id,
+    chargesEnabled,
+    payoutsEnabled,
+    status,
+  }, 'ACCOUNT_UPDATED');
+}
+
 async function processEvent(
   supabase: SupabaseClient,
   event: Stripe.Event,
@@ -775,6 +816,15 @@ async function processEvent(
       await handleDisputeCreated(
         supabase,
         event.data.object as Stripe.Dispute,
+        event.id,
+        requestId
+      );
+      break;
+
+    case 'account.updated':
+      await handleAccountUpdated(
+        supabase,
+        event.data.object as Stripe.Account,
         event.id,
         requestId
       );
@@ -829,7 +879,7 @@ export async function POST(req: NextRequest) {
       duration,
     }, 'WEBHOOK_PROCESSED_SUCCESS');
 
-    return NextResponse.json({ received: true, requestId, duration }, { status: 200 });
+    return withRequestIdHeader(NextResponse.json({ received: true, requestId, duration }, { status: 200 }), requestId);
   } catch (error: any) {
     const duration = Date.now() - startTime;
 
@@ -854,14 +904,17 @@ export async function POST(req: NextRequest) {
       logger.error('Failed to log webhook failure business event', { requestId }, logError as Error, 'WEBHOOK_BUSINESS_LOG_FAILED');
     }
 
-    return NextResponse.json(
-      {
-        error: errorMessage,
-        requestId,
-        duration,
-        retry: statusCode >= 500,
-      },
-      { status: statusCode }
+    return withRequestIdHeader(
+      NextResponse.json(
+        {
+          error: errorMessage,
+          requestId,
+          duration,
+          retry: statusCode >= 500,
+        },
+        { status: statusCode }
+      ),
+      requestId
     );
   }
 }

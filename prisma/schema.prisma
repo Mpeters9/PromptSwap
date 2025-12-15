@@ -75,6 +75,10 @@ model Profile {
   subscription_status String?
   createdAt           DateTime? @default(now()) @map("created_at") @db.Timestamptz(6)
   stripeAccountId     String?   @map("stripe_account_id")
+  connectedAccountId  String?   @map("connected_account_id")
+  stripeChargesEnabled Boolean? @default(false) @map("stripe_charges_enabled")
+  stripePayoutsEnabled Boolean? @default(false) @map("stripe_payouts_enabled")
+  stripeAccountStatus String?   @map("stripe_account_status")
   isAdmin             Boolean?  @default(false) @map("is_admin")
   user                User      @relation(fields: [id], references: [id], onDelete: Cascade, onUpdate: NoAction)
 

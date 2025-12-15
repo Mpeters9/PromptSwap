@@ -9,6 +9,9 @@ import { supabase } from '@/lib/supabase/client';
 type ProfileRow = {
   stripe_account_id?: string | null;
   connected_account_id?: string | null;
+  stripe_charges_enabled?: boolean | null;
+  stripe_payouts_enabled?: boolean | null;
+  stripe_account_status?: string | null;
 };
 
 type SaleRow = {
@@ -39,6 +42,7 @@ export default function DashboardPayoutsPage() {
   const [error, setError] = useState<string | null>(null);
   const [connecting, setConnecting] = useState(false);
   const [connectError, setConnectError] = useState<string | null>(null);
+  const [status, setStatus] = useState<'onboarding_required' | 'pending' | 'ready'>('onboarding_required');
 
   const earnings = useMemo(() => {
     const totalSales = sales.reduce((sum, sale) => sum + (Number(sale.price) || 0), 0);
@@ -65,20 +69,16 @@ export default function DashboardPayoutsPage() {
         return;
       }
 
-      const { data: profileData, error: profileErr } = await supabase
-        .from('profiles')
-        .select('stripe_account_id, connected_account_id')
-        .eq('id', userId)
-        .single();
-
-      if (profileErr) {
-        console.error('Payouts profile error', profileErr);
-        setError(profileErr.message);
+      const statusRes = await fetch('/api/stripe/connect/status', { headers: { 'x-request-id': crypto.randomUUID() } });
+      if (!statusRes.ok) {
+        const body = await statusRes.json().catch(() => ({}));
+        setError(body?.error?.message || 'Failed to load Stripe status');
         setLoading(false);
         return;
       }
-
-      setAccountId(profileData?.connected_account_id ?? profileData?.stripe_account_id ?? null);
+      const statusPayload = await statusRes.json();
+      setAccountId(statusPayload?.data?.accountId ?? null);
+      setStatus(statusPayload?.data?.status ?? 'onboarding_required');
 
       const [{ data: salesData, error: salesErr }, { data: payoutData, error: payoutsErr }] = await Promise.all([
         supabase
@@ -117,7 +117,7 @@ export default function DashboardPayoutsPage() {
     setConnecting(true);
     setConnectError(null);
     try {
-      const res = await fetch('/api/stripe/connect', { method: 'POST' });
+      const res = await fetch('/api/stripe/connect/onboard', { method: 'POST', headers: { 'x-request-id': crypto.randomUUID() } });
       const data = (await res.json()) as { url?: string; error?: string };
       if (!res.ok || !data.url) {
         throw new Error(data.error || 'Unable to start Stripe Connect.');
@@ -164,7 +164,7 @@ export default function DashboardPayoutsPage() {
             <div>
               <p className="text-xs uppercase text-slate-500">Stripe Connect</p>
               <h2 className="text-xl font-semibold text-slate-900">
-                {accountId ? 'Connected' : 'Not Connected'}
+                {status === 'ready' ? 'Ready' : status === 'pending' ? 'Pending verification' : 'Onboarding required'}
               </h2>
               <p className="mt-1 text-sm text-slate-600">
                 {accountId ? `Account: ${accountId}` : 'Connect to receive payouts.'}
@@ -179,6 +179,9 @@ export default function DashboardPayoutsPage() {
               {connecting ? 'Connecting...' : 'Connect Stripe Account'}
             </button>
           </div>
+          <p className="mt-2 text-xs text-slate-500">
+            Status: {status}
+          </p>
         </div>
 
         <div className="rounded-xl bg-white p-6 shadow-sm">
