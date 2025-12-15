@@ -1,8 +1,6 @@
-import type { Prisma } from '@prisma/client';
 import Link from 'next/link';
 
 import { PromptCard } from '@/components/PromptCard';
-import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -14,7 +12,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
-import { prisma } from '@/lib/prisma';
+import { Badge } from '@/components/ui/badge';
 
 export const dynamic = 'force-dynamic';
 export const metadata = buildMetadata({
@@ -24,64 +22,52 @@ export const metadata = buildMetadata({
 });
 
 type MarketplaceProps = {
-  searchParams?: Promise<{ search?: string; category?: string; sort?: string }>;
+  searchParams?: Promise<{
+    q?: string;
+    tags?: string;
+    sort?: string;
+    priceMin?: string;
+    priceMax?: string;
+    page?: string;
+  }>;
 };
+
+async function fetchPrompts(params: URLSearchParams) {
+  const baseUrl = process.env.NEXT_PUBLIC_SITE_URL || 'http://localhost:3000';
+  const res = await fetch(`${baseUrl}/api/prompts/search?${params.toString()}`, {
+    cache: 'no-store',
+    headers: { 'x-request-id': crypto.randomUUID() },
+  });
+
+  if (!res.ok) {
+    console.error('Failed to load marketplace', res.status);
+    return { items: [], total: 0 };
+  }
+
+  const payload = await res.json();
+  return payload?.data ?? { items: [], total: 0 };
+}
 
 export default async function MarketplacePage({ searchParams }: MarketplaceProps) {
   const resolvedParams = await searchParams;
-  const search = resolvedParams?.search?.toString().trim() ?? '';
-  const category = resolvedParams?.category?.toString().trim() ?? '';
-  const sort = resolvedParams?.sort?.toString().trim() ?? 'newest';
+  const q = resolvedParams?.q?.toString().trim() ?? '';
+  const tagsRaw = resolvedParams?.tags?.toString().trim() ?? '';
+  const priceMin = resolvedParams?.priceMin?.toString().trim() ?? '';
+  const priceMax = resolvedParams?.priceMax?.toString().trim() ?? '';
+  const sort = resolvedParams?.sort?.toString().trim() ?? 'new';
 
-  const orderBy: Prisma.PromptOrderByWithRelationInput =
-    sort === 'priceAsc'
-      ? { price: 'asc' }
-      : sort === 'priceDesc'
-        ? { price: 'desc' }
-        : sort === 'popular'
-          ? { sales: { _count: 'desc' } }
-          : { createdAt: 'desc' };
+  const params = new URLSearchParams();
+  if (q) params.set('q', q);
+  if (tagsRaw) params.set('tags', tagsRaw);
+  if (priceMin) params.set('priceMin', priceMin);
+  if (priceMax) params.set('priceMax', priceMax);
+  params.set('sort', sort);
 
-  let prompts: any[] = [];
-  let categories: any[] = [];
-
-  try {
-    [prompts, categories] = await Promise.all([
-      prisma.prompt.findMany({
-        where: {
-          AND: [
-            search
-              ? {
-                  OR: [
-                    { title: { contains: search, mode: 'insensitive' } },
-                    { description: { contains: search, mode: 'insensitive' } },
-                  ],
-                }
-              : undefined,
-          ].filter(Boolean) as object[],
-        },
-        orderBy,
-        select: {
-          id: true,
-          title: true,
-          description: true,
-          price: true,
-          tags: true,
-          createdAt: true,
-          userId: true,
-          likes: true,
-          previewImage: true,
-        },
-      }),
-      Promise.resolve([] as any[]),
-    ]);
-  } catch (err) {
-    console.error('Marketplace load failed', err);
-  }
-
-  const categoryOptions = categories
-    .map((c) => c.category)
-    .filter((c): c is string => Boolean(c));
+  const { items: prompts } = await fetchPrompts(params);
+  const tagsList = tagsRaw
+    .split(',')
+    .map((t) => t.trim())
+    .filter(Boolean);
 
   return (
     <div className="mx-auto max-w-6xl px-4 py-8">
@@ -102,35 +88,47 @@ export default async function MarketplacePage({ searchParams }: MarketplaceProps
             >
               <Input
                 type="text"
-                name="search"
-                defaultValue={search}
+                name="q"
+                defaultValue={q}
                 placeholder="Search prompts..."
                 className="w-full"
               />
 
-              <Select name="category" defaultValue={category}>
-                <SelectTrigger className="w-full">
-                  <SelectValue placeholder="Category" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="">All categories</SelectItem>
-                  {categoryOptions.map((cat) => (
-                    <SelectItem key={cat} value={cat}>
-                      {cat}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              <div className="grid grid-cols-2 gap-2">
+                <Input
+                  type="number"
+                  name="priceMin"
+                  min={0}
+                  step="0.01"
+                  defaultValue={priceMin}
+                  placeholder="Min price"
+                />
+                <Input
+                  type="number"
+                  name="priceMax"
+                  min={0}
+                  step="0.01"
+                  defaultValue={priceMax}
+                  placeholder="Max price"
+                />
+              </div>
+
+              <Input
+                type="text"
+                name="tags"
+                defaultValue={tagsRaw}
+                placeholder="Tags (comma separated)"
+              />
 
               <Select name="sort" defaultValue={sort}>
                 <SelectTrigger className="w-full">
                   <SelectValue placeholder="Sort" />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="newest">Newest</SelectItem>
-                  <SelectItem value="priceAsc">Price: Low to High</SelectItem>
-                  <SelectItem value="priceDesc">Price: High to Low</SelectItem>
-                  <SelectItem value="popular">Popular</SelectItem>
+                  <SelectItem value="new">Newest</SelectItem>
+                  <SelectItem value="top">Top</SelectItem>
+                  <SelectItem value="price_asc">Price: Low to High</SelectItem>
+                  <SelectItem value="price_desc">Price: High to Low</SelectItem>
                 </SelectContent>
               </Select>
 
@@ -138,13 +136,23 @@ export default async function MarketplacePage({ searchParams }: MarketplaceProps
                 <Button type="submit" className="w-full">
                   Apply
                 </Button>
-                {(search || category || sort !== 'newest') && (
+                {(q || tagsRaw || priceMin || priceMax || sort !== 'new') && (
                   <Button variant="ghost" asChild className="w-full">
                     <Link href="/marketplace">Clear</Link>
                   </Button>
                 )}
               </div>
             </form>
+
+            {tagsList.length > 0 && (
+              <div className="mt-3 flex flex-wrap gap-2 text-xs text-muted-foreground">
+                {tagsList.map((tag) => (
+                  <Badge key={tag} variant="secondary">
+                    {tag}
+                  </Badge>
+                ))}
+              </div>
+            )}
           </CardContent>
         </Card>
       </div>
@@ -152,7 +160,7 @@ export default async function MarketplacePage({ searchParams }: MarketplaceProps
       {prompts.length === 0 ? (
         <div className="rounded-xl border border-slate-200 bg-white p-6 text-center shadow-sm dark:border-slate-800 dark:bg-slate-900">
           <p className="text-sm text-slate-600 dark:text-slate-300">
-            {search || category ? 'No prompts match your filters.' : 'No prompts found.'}
+            {q || tagsRaw ? 'No prompts match your filters.' : 'No prompts found.'}
           </p>
         </div>
       ) : (
