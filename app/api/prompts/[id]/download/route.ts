@@ -1,7 +1,8 @@
 import type { NextRequest } from 'next/server';
 import { NextResponse } from 'next/server';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
-import { createSuccessResponse, createErrorResponse } from '@/lib/api/responses';
+import { createErrorResponse } from '@/lib/api/responses';
+import { canDownloadPurchase } from '@/lib/purchases';
 
 export const runtime = 'nodejs';
 
@@ -56,24 +57,21 @@ export async function GET(
       );
     }
 
-    // Check authorization - user owns prompt or has purchased it
-    let authorized = prompt.user_id === user.id;
-
-    if (!authorized) {
+    // Check authorization - user owns prompt or has eligible purchase
+    if (prompt.user_id !== user.id) {
       const { data: purchase } = await supabase
         .from('purchases')
-        .select('id')
+        .select('id,status')
         .eq('buyer_id', user.id)
         .eq('prompt_id', prompt.id)
         .maybeSingle();
-      authorized = Boolean(purchase);
-    }
 
-    if (!authorized) {
-      return NextResponse.json(
-        createErrorResponse('FORBIDDEN', 'You do not have permission to download this prompt'),
-        { status: 403 }
-      );
+      if (!purchase || !canDownloadPurchase(purchase)) {
+        return NextResponse.json(
+          createErrorResponse('FORBIDDEN', 'You do not have permission to download this prompt'),
+          { status: 403 }
+        );
+      }
     }
 
     const filename = safeFilename(prompt.title);

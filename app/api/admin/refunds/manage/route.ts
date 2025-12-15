@@ -1,16 +1,16 @@
 
 import { NextRequest, NextResponse } from 'next/server';
-import { createSupabaseServerClient, getCurrentUser } from '@/lib/supabase/server';
+import { createSupabaseAdminClient, getCurrentUser } from '@/lib/supabase/server';
 import { adminRefundActionSchema } from '@/lib/validation/schemas';
-import { 
-  createSuccessResponse, 
-  createErrorResponse, 
-  createValidationErrorResponse, 
-  createAuthErrorResponse, 
+import {
+  createSuccessResponse,
+  createErrorResponse,
+  createValidationErrorResponse,
+  createAuthErrorResponse,
   createForbiddenErrorResponse,
   createNotFoundErrorResponse,
   createServerErrorResponse,
-  ErrorCodes 
+  ErrorCodes,
 } from '@/lib/api/responses';
 import Stripe from 'stripe';
 
@@ -50,7 +50,7 @@ export async function POST(request: NextRequest) {
     const { refund_request_id: refundRequestId, action, reason, partial_amount } = validationResult.data;
 
     // Initialize Supabase client
-    const supabase = await createSupabaseServerClient();
+    const supabase = await createSupabaseAdminClient();
 
     // Get refund request with purchase details
     const { data: refundRequest, error: fetchError } = await supabase
@@ -79,33 +79,37 @@ export async function POST(request: NextRequest) {
     }
 
     // Check if refund request is still pending
-    if (refundRequest.status !== 'pending') {
+    if (refundRequest.status !== 'open') {
       return NextResponse.json(createErrorResponse(
         ErrorCodes.INVALID_STATUS,
-        'Refund request is no longer pending'
+        'Refund request is no longer open'
       ), { status: 400 });
     }
 
     const purchase = refundRequest.purchases;
     
-    // Determine refund amount
-    let refundAmount: number;
-    if (action === 'partial' && partial_amount) {
-      const totalAmount = parseFloat(purchase.amount_total);
-      const alreadyRefunded = parseFloat(purchase.refunded_amount || 0);
-      const refundableAmount = totalAmount - alreadyRefunded;
+    // Determine refund amount (cents)
+    const totalAmountCents = Number(purchase.amount_total ?? 0);
+    const alreadyRefundedCents = Number(purchase.refunded_amount ?? 0);
+    const refundableCents = Math.max(0, totalAmountCents - alreadyRefundedCents);
 
-      if (partial_amount > refundableAmount) {
+    if (refundableCents <= 0) {
+      return NextResponse.json(createErrorResponse(
+        ErrorCodes.INVALID_STATUS,
+        'No refundable amount remaining'
+      ), { status: 409 });
+    }
+
+    let refundAmountCents = refundableCents;
+    if (action === 'partial' && partial_amount) {
+      const partialCents = Math.round(partial_amount * 100);
+      if (partialCents > refundableCents) {
         return NextResponse.json(createErrorResponse(
           ErrorCodes.VALIDATION_ERROR,
           'Partial amount exceeds refundable amount'
         ), { status: 400 });
       }
-      refundAmount = partial_amount;
-    } else {
-      const totalAmount = parseFloat(purchase.amount_total);
-      const alreadyRefunded = parseFloat(purchase.refunded_amount || 0);
-      refundAmount = totalAmount - alreadyRefunded;
+      refundAmountCents = partialCents;
     }
 
     // Initialize Stripe
@@ -117,42 +121,38 @@ export async function POST(request: NextRequest) {
     let refundStatus = 'failed';
 
     try {
-      // Process refund through Stripe
-      if (purchase.stripe_payment_intent_id) {
-        // Use Payment Intent for refunds
-        stripeRefund = await stripe.refunds.create({
-          payment_intent: purchase.stripe_payment_intent_id,
-          amount: Math.round(refundAmount * 100), // Convert to cents
-          reason: 'requested_by_customer',
-          metadata: {
-            purchase_id: purchase.id,
-            refund_request_id: refundRequestId,
-            admin_id: user.id,
-            reason: reason,
-          },
-        });
-      } else if (purchase.stripe_checkout_session_id) {
-        // Fallback to using checkout session
-        stripeRefund = await stripe.refunds.create({
-          payment_intent: purchase.stripe_checkout_session_id,
-          amount: Math.round(refundAmount * 100),
-          reason: 'requested_by_customer',
-          metadata: {
-            purchase_id: purchase.id,
-            refund_request_id: refundRequestId,
-            admin_id: user.id,
-            reason: reason,
-          },
-        });
-      } else {
+      // Process refund through Stripe (payment intent preferred)
+      let paymentIntentId = purchase.stripe_payment_intent_id;
+
+      if (!paymentIntentId && purchase.stripe_checkout_session_id) {
+        const session = await stripe.checkout.sessions.retrieve(purchase.stripe_checkout_session_id);
+        paymentIntentId =
+          typeof session.payment_intent === 'string'
+            ? session.payment_intent
+            : (session.payment_intent as Stripe.PaymentIntent | null)?.id ?? null;
+      }
+
+      if (!paymentIntentId) {
         throw new Error('No Stripe payment method found for this purchase');
       }
+
+      stripeRefund = await stripe.refunds.create({
+        payment_intent: paymentIntentId,
+        amount: refundAmountCents,
+        reason: 'requested_by_customer',
+        metadata: {
+          purchase_id: purchase.id,
+          refund_request_id: refundRequestId,
+          admin_id: user.id,
+          reason: reason,
+        },
+      });
 
       refundStatus = stripeRefund.status || 'pending';
       console.log('Stripe refund created successfully:', {
         refundRequestId,
         stripeRefundId: stripeRefund.id,
-        amount: refundAmount,
+        amount: refundAmountCents / 100,
         status: refundStatus
       });
 
@@ -175,12 +175,12 @@ export async function POST(request: NextRequest) {
     const { error: updateError } = await supabase
       .from('refund_requests')
       .update({
-        status: action === 'approve' || action === 'partial' ? 'approved' : 'rejected',
+        status: action === 'approve' || action === 'partial' ? 'approved' : 'denied',
         admin_id: user.id,
         processed_at: new Date().toISOString(),
         admin_reason: reason,
         stripe_refund_id: stripeRefund?.id,
-        final_amount: refundAmount
+        final_amount: refundAmountCents
       })
       .eq('id', refundRequestId);
 
@@ -221,7 +221,7 @@ export async function POST(request: NextRequest) {
         .insert({
           purchase_id: purchase.id,
           stripe_refund_id: stripeRefund.id,
-          amount: refundAmount,
+          amount: refundAmountCents,
           currency: purchase.currency,
           reason: reason,
           status: refundStatus,
@@ -238,43 +238,11 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // Update purchase record if refund is completed
-    if (refundStatus === 'succeeded') {
-      const currentRefunded = parseFloat(purchase.refunded_amount || 0);
-      const newRefundedAmount = currentRefunded + refundAmount;
-      const totalAmount = parseFloat(purchase.amount_total);
-
-      let purchaseStatus = purchase.status;
-      if (newRefundedAmount >= totalAmount) {
-        purchaseStatus = 'refunded';
-      } else if (newRefundedAmount > 0) {
-        purchaseStatus = 'partially_refunded';
-      }
-
-      const { error: purchaseUpdateError } = await supabase
-        .from('purchases')
-        .update({
-          refunded_amount: newRefundedAmount,
-          refunded_at: newRefundedAmount > 0 ? new Date().toISOString() : null,
-          refund_reason: newRefundedAmount > 0 ? reason : null,
-          status: purchaseStatus,
-          last_stripe_event_id: stripeRefund?.id
-        })
-        .eq('id', purchase.id);
-
-      if (purchaseUpdateError) {
-        console.error('Failed to update purchase after refund:', {
-          purchaseId: purchase.id,
-          error: purchaseUpdateError.message
-        });
-      }
-    }
-
     console.log('Refund action completed successfully:', {
       refundRequestId,
       action,
       adminId: user.id,
-      amount: refundAmount,
+      amount: refundAmountCents / 100,
       stripeRefundId: stripeRefund?.id,
       status: refundStatus
     });
@@ -307,7 +275,7 @@ export async function GET(request: NextRequest) {
     }
 
     const { searchParams } = new URL(request.url);
-    const status = searchParams.get('status') || 'pending';
+    const status = searchParams.get('status') || 'open';
     const limit = parseInt(searchParams.get('limit') || '50');
     const offset = parseInt(searchParams.get('offset') || '0');
 
@@ -354,8 +322,21 @@ export async function GET(request: NextRequest) {
       count: refundRequests?.length || 0
     });
 
-    return NextResponse.json(createSuccessResponse({ 
-      refundRequests: refundRequests || [],
+    const normalized = (refundRequests || []).map((r: any) => ({
+      ...r,
+      requested_amount: r.requested_amount != null ? r.requested_amount / 100 : null,
+      final_amount: r.final_amount != null ? r.final_amount / 100 : null,
+      purchases: r.purchases
+        ? {
+            ...r.purchases,
+            amount_total: r.purchases.amount_total != null ? r.purchases.amount_total / 100 : null,
+            refunded_amount: r.purchases.refunded_amount != null ? r.purchases.refunded_amount / 100 : null,
+          }
+        : null,
+    }));
+
+    return NextResponse.json(createSuccessResponse({
+      refundRequests: normalized,
       status,
       limit,
       offset
@@ -366,4 +347,3 @@ export async function GET(request: NextRequest) {
     return NextResponse.json(createServerErrorResponse(error));
   }
 }
-

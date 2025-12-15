@@ -1,19 +1,21 @@
 
 import { NextRequest, NextResponse } from 'next/server';
-import { createSupabaseServerClient, getCurrentUser } from '@/lib/supabase/server';
+import { createSupabaseAdminClient, createSupabaseServerClient, getCurrentUser } from '@/lib/supabase/server';
 import { refundRequestSchema } from '@/lib/validation/schemas';
-import { 
-  createSuccessResponse, 
-  createErrorResponse, 
-  createValidationErrorResponse, 
-  createAuthErrorResponse, 
+import { notifyAdmins } from '@/lib/notifications';
+import {
+  createSuccessResponse,
+  createErrorResponse,
+  createValidationErrorResponse,
+  createAuthErrorResponse,
   createNotFoundErrorResponse,
   createServerErrorResponse,
-  ErrorCodes 
+  ErrorCodes,
 } from '@/lib/api/responses';
 
 export async function POST(request: NextRequest) {
   try {
+    const requestId = crypto.randomUUID();
     // Get current user
     const user = await getCurrentUser();
     if (!user) {
@@ -103,11 +105,11 @@ export async function POST(request: NextRequest) {
     }
 
     // Calculate refundable amount
-    const totalAmount = parseFloat(purchase.amount_total);
-    const alreadyRefunded = parseFloat(purchase.refunded_amount || 0);
-    const refundableAmount = totalAmount - alreadyRefunded;
+    const totalAmountCents = Number(purchase.amount_total ?? 0);
+    const alreadyRefundedCents = Number(purchase.refunded_amount ?? 0);
+    const refundableAmountCents = totalAmountCents - alreadyRefundedCents;
 
-    if (refundableAmount <= 0) {
+    if (refundableAmountCents <= 0) {
       return NextResponse.json(createErrorResponse(
         ErrorCodes.VALIDATION_ERROR,
         'No refundable amount available'
@@ -115,20 +117,43 @@ export async function POST(request: NextRequest) {
     }
 
     // Validate requested amount if provided
-    if (requested_amount && requested_amount > refundableAmount) {
+    const requestedAmountCents = requested_amount ? Math.round(requested_amount * 100) : undefined;
+    if (requestedAmountCents && requestedAmountCents > refundableAmountCents) {
       return NextResponse.json(createErrorResponse(
         ErrorCodes.VALIDATION_ERROR,
         'Requested amount exceeds refundable amount'
       ), { status: 400 });
     }
 
+    // Ensure no open request already exists
+    const { data: existingRequest, error: existingError } = await supabase
+      .from('refund_requests')
+      .select('id,status')
+      .eq('purchase_id', purchaseId)
+      .eq('status', 'open')
+      .maybeSingle();
+
+    if (existingError && existingError.code !== 'PGRST116') {
+      return NextResponse.json(createErrorResponse(
+        ErrorCodes.DATABASE_ERROR,
+        'Failed to check refund requests'
+      ), { status: 500 });
+    }
+
+    if (existingRequest) {
+      return NextResponse.json(createErrorResponse(
+        ErrorCodes.ALREADY_EXISTS,
+        'There is already an open refund request for this purchase'
+      ), { status: 409 });
+    }
+
     // Create refund request record
     const refundRequestData = {
       purchase_id: purchaseId,
       reason,
-      requested_amount: requested_amount || refundableAmount,
-      status: 'pending',
-      user_id: user.id,
+      requested_amount: requestedAmountCents ?? refundableAmountCents,
+      status: 'open',
+      requester_user_id: user.id,
       ip_address: request.headers.get('x-forwarded-for') || 'unknown',
       user_agent: request.headers.get('user-agent') || 'unknown',
     };
@@ -141,10 +166,26 @@ export async function POST(request: NextRequest) {
 
     if (insertError) {
       console.error('Error creating refund request:', insertError);
+      const status = insertError.code === '23505' ? 409 : 500;
       return NextResponse.json(createErrorResponse(
-        ErrorCodes.DATABASE_ERROR,
-        'Failed to create refund request'
-      ), { status: 500 });
+        insertError.code === '23505' ? ErrorCodes.ALREADY_EXISTS : ErrorCodes.DATABASE_ERROR,
+        insertError.code === '23505'
+          ? 'There is already an open refund request for this purchase'
+          : 'Failed to create refund request'
+      ), { status });
+    }
+
+    try {
+      const supabaseAdmin = await createSupabaseAdminClient();
+      await notifyAdmins(supabaseAdmin, {
+        type: 'refund.requested',
+        title: 'Refund request submitted',
+        body: `A refund was requested for purchase ${purchaseId}.`,
+        url: '/admin',
+        requestId,
+      });
+    } catch (notifyError) {
+      console.error('Failed to send admin refund notification', notifyError);
     }
 
     // Return success response
@@ -153,10 +194,10 @@ export async function POST(request: NextRequest) {
         id: refundRequest.id,
         purchaseId,
         reason,
-        requestedAmount: refundRequestData.requested_amount,
-        status: 'pending',
+        requestedAmount: (refundRequestData.requested_amount ?? 0) / 100,
+        status: 'open',
         createdAt: refundRequest.created_at,
-        refundableAmount,
+        refundableAmount: refundableAmountCents / 100,
         daysRemaining: Math.max(0, 30 - daysSincePurchase)
       }
     }, 'Refund request created successfully'));
@@ -193,7 +234,7 @@ export async function GET(request: NextRequest) {
           prompts (title)
         )
       `)
-      .eq('user_id', user.id)
+      .eq('requester_user_id', user.id)
       .order('created_at', { ascending: false });
 
     if (error) {
@@ -204,8 +245,20 @@ export async function GET(request: NextRequest) {
       ), { status: 500 });
     }
 
+    const normalized = (refundRequests || []).map((r: any) => ({
+      ...r,
+      requested_amount: r.requested_amount != null ? r.requested_amount / 100 : null,
+      purchases: r.purchases
+        ? {
+            ...r.purchases,
+            amount_total: r.purchases.amount_total != null ? r.purchases.amount_total / 100 : null,
+            refunded_amount: r.purchases.refunded_amount != null ? r.purchases.refunded_amount / 100 : null,
+          }
+        : null,
+    }));
+
     return NextResponse.json(createSuccessResponse({
-      refundRequests: refundRequests || []
+      refundRequests: normalized
     }));
 
   } catch (error: any) {

@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { createSupabaseServerClient, getCurrentUser } from '@/lib/supabase/server';
+import { createSupabaseAdminClient, createSupabaseServerClient, getCurrentUser } from '@/lib/supabase/server';
 import { createSwapSchema } from '@/lib/validation/schemas';
 import { 
   createSuccessResponse, 
@@ -8,11 +8,13 @@ import {
   createAuthErrorResponse, 
   ErrorCodes 
 } from '@/lib/api/responses';
+import { createNotification } from '@/lib/notifications';
 
 export const runtime = 'nodejs';
 
 export async function POST(req: Request) {
   try {
+    const requestId = crypto.randomUUID();
     // Get current user
     const user = await getCurrentUser();
     if (!user) {
@@ -52,7 +54,7 @@ export async function POST(req: Request) {
       .eq('requested_prompt_id', requested_prompt_id)
       .eq('offered_prompt_id', offered_prompt_id)
       .eq('responder_id', responder_id)
-      .eq('status', 'pending')
+      .eq('status', 'requested')
       .maybeSingle();
 
     if (existingSwap) {
@@ -105,7 +107,7 @@ export async function POST(req: Request) {
         responder_id,
         requested_prompt_id,
         offered_prompt_id,
-        status: 'pending',
+        status: 'requested',
       })
       .select('id')
       .single();
@@ -118,10 +120,24 @@ export async function POST(req: Request) {
       ), { status: 500 });
     }
 
+    try {
+      const supabaseAdmin = await createSupabaseAdminClient();
+      await createNotification(supabaseAdmin, {
+        userId: responder_id,
+        type: 'swap.requested',
+        title: 'New swap request',
+        body: 'You have a new swap request waiting for review.',
+        url: '/swaps',
+        requestId,
+      });
+    } catch (notifyError) {
+      console.error('Failed to send swap request notification', notifyError);
+    }
+
     // Return success response
     return NextResponse.json(createSuccessResponse({
       swapId: swap.id,
-      status: 'pending'
+      status: 'requested'
     }, 'Swap request created successfully'));
 
   } catch (error) {
@@ -220,4 +236,3 @@ export async function GET(_req: Request) {
     ), { status: 500 });
   }
 }
-

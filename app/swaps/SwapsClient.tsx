@@ -38,7 +38,7 @@ export default function SwapsClient() {
   const [outgoing, setOutgoing] = useState<Swap[]>([]);
   const [status, setStatus] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [confirm, setConfirm] = useState<{ id: string; action: 'accepted' | 'rejected' } | null>(null);
+  const [confirm, setConfirm] = useState<{ id: string; action: 'accept' | 'decline' | 'cancel' | 'fulfill' } | null>(null);
 
   useEffect(() => {
     if (!loading && user) {
@@ -80,15 +80,15 @@ export default function SwapsClient() {
 
   const handleConfirm = async () => {
     if (!confirm) return;
-    setStatus(confirm.action === 'accepted' ? 'Accepting swap...' : 'Rejecting swap...');
+    const actionLabel = confirm.action.charAt(0).toUpperCase() + confirm.action.slice(1);
+    setStatus(`${actionLabel} swap...`);
     setError(null);
     try {
-      const res = await authorizedFetch(`/api/swaps/${confirm.id}`, {
-        method: 'PATCH',
-        body: JSON.stringify({ status: confirm.action }),
+      const res = await authorizedFetch(`/api/swaps/${confirm.id}/${confirm.action}`, {
+        method: 'POST',
       });
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Failed to update swap');
+      if (!res.ok) throw new Error(data.error || `Failed to ${confirm.action} swap`);
       await fetchSwaps();
       setConfirm(null);
     } catch (err: any) {
@@ -98,8 +98,7 @@ export default function SwapsClient() {
     }
   };
 
-  const incomingPending = useMemo(() => incoming.filter((s) => s.status === 'pending'), [incoming]);
-  const incomingResolved = useMemo(() => incoming.filter((s) => s.status !== 'pending'), [incoming]);
+  const incomingRequested = useMemo(() => incoming.filter((s) => s.status === 'requested'), [incoming]);
 
   if (!user && !loading) {
     return (
@@ -121,7 +120,7 @@ export default function SwapsClient() {
       <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
         <div className="flex items-center justify-between">
           <h2 className="text-lg font-semibold text-slate-900">Incoming Requests</h2>
-          <span className="text-xs text-slate-500">{incomingPending.length} pending</span>
+          <span className="text-xs text-slate-500">{incomingRequested.length} requested</span>
         </div>
         {incoming.length === 0 ? (
           <p className="mt-4 text-sm text-slate-600">No incoming swaps.</p>
@@ -149,7 +148,7 @@ export default function SwapsClient() {
         ) : (
           <div className="mt-4 space-y-4">
             {outgoing.map((swap) => (
-              <SwapCard key={swap.id} swap={swap} />
+              <SwapCard key={swap.id} swap={swap} onAction={(action) => setConfirm({ id: swap.id, action })} />
             ))}
           </div>
         )}
@@ -192,14 +191,16 @@ function SwapCard({
 }: {
   swap: Swap;
   isIncoming?: boolean;
-  onAction?: (action: 'accepted' | 'rejected') => void;
+  onAction?: (action: 'accept' | 'decline' | 'cancel' | 'fulfill') => void;
 }) {
   const statusColor =
     swap.status === 'accepted'
       ? 'bg-emerald-50 text-emerald-700'
-      : swap.status === 'rejected'
+      : swap.status === 'declined' || swap.status === 'cancelled'
         ? 'bg-red-50 text-red-700'
-        : 'bg-amber-50 text-amber-700';
+        : swap.status === 'fulfilled'
+          ? 'bg-blue-50 text-blue-700'
+          : 'bg-amber-50 text-amber-700';
 
   return (
     <div className="flex flex-col gap-3 rounded-xl border border-slate-200 p-4">
@@ -213,21 +214,45 @@ function SwapCard({
         <PromptBadge label="You get" prompt={swap.requested_prompt} />
       </div>
 
-      {isIncoming && swap.status === 'pending' && (
+      {isIncoming && swap.status === 'requested' && (
         <div className="flex items-center gap-2">
           <button
             type="button"
-            onClick={() => onAction?.('accepted')}
+            onClick={() => onAction?.('accept')}
             className="flex-1 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2"
           >
             Accept
           </button>
           <button
             type="button"
-            onClick={() => onAction?.('rejected')}
+            onClick={() => onAction?.('decline')}
             className="flex-1 rounded-lg border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-800 transition hover:border-red-200 hover:text-red-600 focus:outline-none focus:ring-2 focus:ring-red-500 focus:ring-offset-2"
           >
             Reject
+          </button>
+        </div>
+      )}
+
+      {!isIncoming && swap.status === 'requested' && (
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => onAction?.('cancel')}
+            className="flex-1 rounded-lg border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-800 transition hover:border-red-200 hover:text-red-600 focus:outline-none focus:ring-2 focus:ring-red-500 focus:ring-offset-2"
+          >
+            Cancel
+          </button>
+        </div>
+      )}
+
+      {swap.status === 'accepted' && (
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => onAction?.('fulfill')}
+            className="flex-1 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-emerald-700 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-2"
+          >
+            Fulfill
           </button>
         </div>
       )}

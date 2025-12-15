@@ -1,23 +1,15 @@
 import Stripe from 'stripe';
-import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { BusinessEventLogger } from '@/lib/middleware/api-handler';
-import { AppError, isOperationalError } from '@/lib/errors';
+import { AppError, ErrorCategory } from '@/lib/errors';
 import { logger } from '@/lib/logging';
-
-export interface StripeWebhookContext {
-  requestId: string;
-  rawBody: string;
-  signature: string;
-  event: Stripe.Event;
-  supabase: ReturnType<typeof createSupabaseServerClient>;
-}
 
 export interface PurchaseCreationData {
   buyerId: string;
   sellerId: string;
   promptId: string;
-  stripeSessionId: string;
-  amount: number;
+  stripeSessionId?: string | null;
+  stripePaymentIntentId?: string | null;
+  amountTotal: number; // cents
   currency: string;
 }
 
@@ -49,12 +41,13 @@ export class StripeWebhookHandler {
   /**
    * Verify Stripe signature using raw request body
    */
-  async verifySignature(rawBody: string, signature: string): Promise<Stripe.Event> {
+  verifySignature(rawBody: Buffer, signature: string, requestId?: string): Stripe.Event {
+    const logRequestId = requestId ?? this.requestId;
     try {
       const event = this.stripe.webhooks.constructEvent(rawBody, signature, this.webhookSecret);
       
       logger.info('Stripe signature verified successfully', {
-        requestId: this.requestId,
+        requestId: logRequestId,
         eventId: event.id,
         eventType: event.type,
         eventCreated: event.created,
@@ -63,14 +56,18 @@ export class StripeWebhookHandler {
       return event;
     } catch (error: any) {
       logger.error('Stripe signature verification failed', {
-        requestId: this.requestId,
+        requestId: logRequestId,
         error: error.message,
         errorType: error.type,
       }, error, 'STRIPE_SIGNATURE_VERIFICATION_FAILED');
       
-      throw new AppError('INVALID_STRIPE_SIGNATURE', 'Invalid Stripe webhook signature', 400, {
-        details: error.message
-      });
+      throw new AppError(
+        ErrorCategory.AUTH,
+        'INVALID_STRIPE_SIGNATURE',
+        'Invalid Stripe webhook signature',
+        { details: error.message },
+        400
+      );
     }
   }
 
@@ -86,9 +83,13 @@ export class StripeWebhookHandler {
         .maybeSingle();
 
       if (error && error.code !== 'PGRST116') {
-        throw new AppError('DATABASE_ERROR', 'Failed to check event processing status', 500, {
-          details: error.message
-        });
+        throw new AppError(
+          ErrorCategory.EXTERNAL,
+          'DATABASE_ERROR',
+          'Failed to check event processing status',
+          { details: error.message },
+          500
+        );
       }
 
       const isProcessed = Boolean(data);
@@ -128,9 +129,13 @@ export class StripeWebhookHandler {
         .insert(eventData);
 
       if (error && error.code !== '23505') {
-        throw new AppError('DATABASE_ERROR', 'Failed to record processed event', 500, {
-          details: error.message
-        });
+        throw new AppError(
+          ErrorCategory.EXTERNAL,
+          'DATABASE_ERROR',
+          'Failed to record processed event',
+          { details: error.message },
+          500
+        );
       }
 
       logger.info('Event marked as processed', {
@@ -159,13 +164,16 @@ export class StripeWebhookHandler {
         .select('id')
         .eq('buyer_id', data.buyerId)
         .eq('prompt_id', data.promptId)
-        .eq('stripe_session_id', data.stripeSessionId)
         .maybeSingle();
 
-      if (checkError) {
-        throw new AppError('DATABASE_ERROR', 'Failed to check existing purchase', 500, {
-          details: checkError.message
-        });
+      if (checkError && checkError.code !== 'PGRST116') {
+        throw new AppError(
+          ErrorCategory.EXTERNAL,
+          'DATABASE_ERROR',
+          'Failed to check existing purchase',
+          { details: checkError.message },
+          500
+        );
       }
 
       if (existing) {
@@ -184,10 +192,12 @@ export class StripeWebhookHandler {
         buyer_id: data.buyerId,
         seller_id: data.sellerId,
         prompt_id: data.promptId,
-        stripe_session_id: data.stripeSessionId,
-        amount: data.amount,
+        stripe_checkout_session_id: data.stripeSessionId ?? null,
+        stripe_payment_intent_id: data.stripePaymentIntentId ?? null,
+        amount_total: data.amountTotal,
+        refunded_amount: 0,
         currency: data.currency,
-        status: 'completed',
+        status: 'paid',
         created_at: new Date().toISOString(),
       };
 
@@ -212,15 +222,18 @@ export class StripeWebhookHandler {
             .select('id')
             .eq('buyer_id', data.buyerId)
             .eq('prompt_id', data.promptId)
-            .eq('stripe_session_id', data.stripeSessionId)
-            .single();
+            .maybeSingle();
 
           return { created: false, purchaseId: existingPurchase?.id };
         }
 
-        throw new AppError('DATABASE_ERROR', 'Failed to create purchase', 500, {
-          details: insertError.message
-        });
+        throw new AppError(
+          ErrorCategory.EXTERNAL,
+          'DATABASE_ERROR',
+          'Failed to create purchase',
+          { details: insertError.message },
+          500
+        );
       }
 
       logger.info('Purchase created successfully', {
@@ -257,9 +270,13 @@ export class StripeWebhookHandler {
         .maybeSingle();
 
       if (checkError) {
-        throw new AppError('DATABASE_ERROR', 'Failed to check existing payout', 500, {
-          details: checkError.message
-        });
+        throw new AppError(
+          ErrorCategory.EXTERNAL,
+          'DATABASE_ERROR',
+          'Failed to check existing payout',
+          { details: checkError.message },
+          500
+        );
       }
 
       if (existing) {
@@ -299,9 +316,13 @@ export class StripeWebhookHandler {
           return { created: false };
         }
 
-        throw new AppError('DATABASE_ERROR', 'Failed to create payout', 500, {
-          details: insertError.message
-        });
+        throw new AppError(
+          ErrorCategory.EXTERNAL,
+          'DATABASE_ERROR',
+          'Failed to create payout',
+          { details: insertError.message },
+          500
+        );
       }
 
       logger.info('Payout created successfully', {
@@ -350,15 +371,23 @@ export class StripeWebhookHandler {
     const sellerId = this.extractMetadata(session.metadata, ['seller_id', 'sellerId']);
 
     if (!promptId) {
-      throw new AppError('INVALID_METADATA', 'Missing prompt_id in checkout session metadata', 400, {
-        metadata: session.metadata
-      });
+      throw new AppError(
+        ErrorCategory.VALIDATION,
+        'INVALID_METADATA',
+        'Missing prompt_id in checkout session metadata',
+        { metadata: session.metadata },
+        400
+      );
     }
 
     if (!buyerId) {
-      throw new AppError('INVALID_METADATA', 'Missing buyer_id in checkout session metadata', 400, {
-        metadata: session.metadata
-      });
+      throw new AppError(
+        ErrorCategory.VALIDATION,
+        'INVALID_METADATA',
+        'Missing buyer_id in checkout session metadata',
+        { metadata: session.metadata },
+        400
+      );
     }
 
     return { promptId, buyerId, sellerId: sellerId || undefined };
@@ -377,9 +406,13 @@ export class StripeWebhookHandler {
       : transfer.destination?.id ?? null;
 
     if (!accountId) {
-      throw new AppError('INVALID_METADATA', 'Missing destination account in transfer', 400, {
-        transferId: transfer.id
-      });
+      throw new AppError(
+        ErrorCategory.VALIDATION,
+        'INVALID_METADATA',
+        'Missing destination account in transfer',
+        { transferId: transfer.id },
+        400
+      );
     }
 
     return { sellerId: sellerId || undefined, accountId };

@@ -1,8 +1,10 @@
+import { createHash } from 'crypto';
+import Stripe from 'stripe';
 import { NextRequest, NextResponse } from 'next/server';
-import { createSupabaseServerClient } from '@/lib/supabase/server';
-import { StripeWebhookHandler, PurchaseCreationData, PayoutCreationData } from '@/lib/stripe/webhook-handler';
-
-import { AppError, isOperationalError, ErrorCategory } from '@/lib/errors';
+import { createSupabaseAdminClient } from '@/lib/supabase/server';
+import { StripeWebhookHandler } from '@/lib/stripe/webhook-handler';
+import { createNotification } from '@/lib/notifications';
+import { AppError, ErrorCategory, isOperationalError } from '@/lib/errors';
 import { logger } from '@/lib/logging';
 import { BusinessEventLogger } from '@/lib/middleware/api-handler';
 
@@ -10,513 +12,856 @@ export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 export const preferredRegion = 'iad1';
 
-// Initialize webhook handler
-const webhookHandler = new StripeWebhookHandler();
+let cachedWebhookHandler: StripeWebhookHandler | null = null;
 
-/**
- * Handle checkout.session.completed events
- */
-async function handleCheckoutCompleted(
-  supabase: any, 
-  session: any,
+export function getWebhookHandler(): StripeWebhookHandler {
+  if (!cachedWebhookHandler) {
+    cachedWebhookHandler = new StripeWebhookHandler();
+  }
+  return cachedWebhookHandler;
+}
+
+export function setWebhookHandler(handler: StripeWebhookHandler | null) {
+  cachedWebhookHandler = handler;
+}
+
+type SupabaseClient = Awaited<ReturnType<typeof createSupabaseAdminClient>>;
+type PurchaseRow = {
+  id: string;
+  buyer_id: string;
+  seller_id: string;
+  prompt_id: string | number;
+  stripe_checkout_session_id: string | null;
+  stripe_payment_intent_id: string | null;
+  amount_total: number | null;
+  refunded_amount: number | null;
+  status: string | null;
+  currency: string | null;
+  refund_reason?: string | null;
+};
+
+const STATUS_ORDER = ['refunded', 'disputed', 'partially_refunded', 'paid', 'failed', 'pending'] as const;
+type PurchaseStatus = (typeof STATUS_ORDER)[number];
+
+const STRIPE_HANDLER_LABELS = {
+  checkoutCompleted: 'CHECKOUT_COMPLETED',
+  paymentSucceeded: 'PAYMENT_INTENT_SUCCEEDED',
+  refundApplied: 'CHARGE_REFUNDED',
+  disputeCreated: 'DISPUTE_CREATED',
+};
+
+function prioritizeStatus(current: string | null | undefined, incoming: PurchaseStatus): PurchaseStatus {
+  const currentIndex = STATUS_ORDER.indexOf((current ?? 'pending') as PurchaseStatus);
+  const incomingIndex = STATUS_ORDER.indexOf(incoming);
+
+  if (currentIndex === -1) return incoming;
+  if (incomingIndex === -1) return (current ?? 'pending') as PurchaseStatus;
+
+  return STATUS_ORDER[Math.min(currentIndex, incomingIndex)];
+}
+
+function stripeTimestampToIso(seconds?: number) {
+  return seconds ? new Date(seconds * 1000).toISOString() : new Date().toISOString();
+}
+
+function hashPayload(payload: any) {
+  return createHash('sha256').update(JSON.stringify(payload || {})).digest('hex');
+}
+
+function summarizeEventPayload(event: Stripe.Event) {
+  const object: any = event.data?.object ?? {};
+  return {
+    object: object.object,
+    id: object.id,
+    type: event.type,
+    payment_intent: object.payment_intent ?? object.id ?? null,
+    charge: object.charge ?? null,
+    amount: object.amount ?? object.amount_total ?? null,
+    refund_id: object.object === 'refund' ? object.id : undefined,
+  };
+}
+
+async function recordStripeEvent(
+  supabase: SupabaseClient,
+  event: Stripe.Event,
   requestId: string
-): Promise<void> {
-  try {
-    logger.info('Processing checkout.session.completed', {
-      requestId,
-      sessionId: session.id,
-      amount: session.amount_total,
-      currency: session.currency,
-    }, 'CHECKOUT_COMPLETED_START');
+) {
+  const stripeCreatedAt = event.created ? stripeTimestampToIso(event.created) : null;
+  const payload = summarizeEventPayload(event);
 
-    // Validate metadata
-    const { promptId, buyerId, sellerId } = StripeWebhookHandler.validatePurchaseMetadata(session);
+  const { error } = await supabase
+    .from('stripe_events')
+    .insert({
+      event_id: event.id,
+      type: event.type,
+      livemode: Boolean(event.livemode),
+      stripe_created_at: stripeCreatedAt,
+      payload,
+      request_id: requestId,
+    });
 
-    // Fetch prompt to get seller and price info
-    const { data: prompt, error: promptError } = await supabase
-      .from('prompts')
-      .select('id, user_id, price, title')
-      .eq('id', promptId)
-      .single();
+  if (!error) return { alreadyProcessed: false };
 
+  if (error.code === '23505') {
+    const { data: existing, error: fetchError } = await supabase
+      .from('stripe_events')
+      .select('processed_at')
+      .eq('event_id', event.id)
+      .maybeSingle();
 
-    if (promptError) {
-      throw new AppError(ErrorCategory.RESOURCE, 'PROMPT_NOT_FOUND', `Prompt ${promptId} not found`, 404, {
-        details: promptError.message
-      });
+    if (fetchError) {
+      throw new AppError(
+        ErrorCategory.EXTERNAL,
+        'DATABASE_ERROR',
+        'Failed to inspect existing Stripe event',
+        { details: fetchError.message }
+      );
     }
 
-    // Use metadata seller ID or prompt
-    const finalSellerId = sellerId || prompt.user_id;
-    if (!finalSellerId) {
-      throw new AppError(ErrorCategory.RESOURCE, 'SELLER_NOT_FOUND', 'No seller found for prompt', 404, {
-        promptId,
-        sellerId,
-        promptUserId: prompt.user_id
-      });
+    if (existing?.processed_at) {
+      return { alreadyProcessed: true, processedAt: existing.processed_at };
     }
 
-    // Convert amount from cents to dollars
-    const amount = StripeWebhookHandler.centsToDollars(session.amount_total ?? session.amount_subtotal ?? null);
-    const price = amount ?? (prompt.price !== null ? Number(prompt.price) : null);
+    return { alreadyProcessed: false, existing: true };
+  }
 
-    if (!price) {
-      throw new AppError(ErrorCategory.VALIDATION, 'INVALID_PRICE', 'No valid price found for purchase', 400, {
-        sessionAmount: session.amount_total,
-        promptPrice: prompt.price
-      });
+  throw new AppError(
+    ErrorCategory.EXTERNAL,
+    'DATABASE_ERROR',
+    'Failed to record Stripe event',
+    { details: error.message }
+  );
+}
+
+async function markStripeEventProcessed(
+  supabase: SupabaseClient,
+  event: Stripe.Event,
+  requestId: string
+) {
+  const payloadHash = hashPayload(event.data?.object ?? {});
+  const { error } = await supabase
+    .from('stripe_events')
+    .update({
+      processed_at: new Date().toISOString(),
+      payload_hash: payloadHash,
+      request_id: requestId,
+    })
+    .eq('event_id', event.id);
+
+  if (error) {
+    throw new AppError(
+      ErrorCategory.EXTERNAL,
+      'DATABASE_ERROR',
+      'Failed to mark Stripe event processed',
+      { details: error.message }
+    );
+  }
+}
+
+async function findPurchase(
+  supabase: SupabaseClient,
+  refs: {
+    purchaseId?: string | null;
+    paymentIntentId?: string | null;
+    checkoutSessionId?: string | null;
+    buyerId?: string | null;
+    promptId?: string | number | null;
+  }
+): Promise<PurchaseRow | null> {
+  const selectors: { column: string; value?: string | number | null }[] = [
+    { column: 'id', value: refs.purchaseId },
+    { column: 'stripe_payment_intent_id', value: refs.paymentIntentId },
+    { column: 'stripe_checkout_session_id', value: refs.checkoutSessionId },
+  ];
+
+  for (const selector of selectors) {
+    if (!selector.value) continue;
+    const { data, error } = await supabase
+      .from('purchases')
+      .select(
+        'id,buyer_id,seller_id,prompt_id,stripe_checkout_session_id,stripe_payment_intent_id,amount_total,refunded_amount,status,currency,refund_reason'
+      )
+      .eq(selector.column, selector.value as any)
+      .maybeSingle();
+
+    if (error && error.code !== 'PGRST116') {
+      throw new AppError(
+        ErrorCategory.EXTERNAL,
+        'DATABASE_ERROR',
+        'Failed to load purchase',
+        { details: error.message }
+      );
     }
 
-    // Create purchase with idempotency
-    const purchaseData: PurchaseCreationData = {
-      buyerId,
-      sellerId: finalSellerId,
-      promptId: prompt.id,
-      stripeSessionId: session.id,
-      amount: price,
-      currency: session.currency || 'usd',
+    if (data) return data as PurchaseRow;
+  }
+
+  if (refs.buyerId && refs.promptId) {
+    const { data, error } = await supabase
+      .from('purchases')
+      .select(
+        'id,buyer_id,seller_id,prompt_id,stripe_checkout_session_id,stripe_payment_intent_id,amount_total,refunded_amount,status,currency,refund_reason'
+      )
+      .eq('buyer_id', refs.buyerId)
+      .eq('prompt_id', refs.promptId as any)
+      .maybeSingle();
+
+    if (error && error.code !== 'PGRST116') {
+      throw new AppError(
+        ErrorCategory.EXTERNAL,
+        'DATABASE_ERROR',
+        'Failed to load purchase by buyer/prompt',
+        { details: error.message }
+      );
+    }
+
+    if (data) return data as PurchaseRow;
+  }
+
+  return null;
+}
+
+async function upsertPurchaseFromStripe(
+  supabase: SupabaseClient,
+  input: {
+    buyerId: string;
+    sellerId: string;
+    promptId: string | number;
+    stripeCheckoutSessionId?: string | null;
+    stripePaymentIntentId?: string | null;
+    amountTotal: number;
+    currency: string;
+    status: PurchaseStatus;
+    lastStripeEventId: string;
+    priceCents?: number;
+  },
+  requestId: string
+): Promise<string | null> {
+  const purchase = await findPurchase(supabase, {
+    paymentIntentId: input.stripePaymentIntentId,
+    checkoutSessionId: input.stripeCheckoutSessionId,
+    buyerId: input.buyerId,
+    promptId: input.promptId,
+  });
+
+  const targetStatus = prioritizeStatus(purchase?.status, input.status);
+
+  if (purchase) {
+    const updates: Record<string, any> = {
+      last_stripe_event_id: input.lastStripeEventId,
     };
 
-    const { created, purchaseId } = await webhookHandler.createPurchase(supabase, purchaseData);
+    if (input.stripeCheckoutSessionId && !purchase.stripe_checkout_session_id) {
+      updates.stripe_checkout_session_id = input.stripeCheckoutSessionId;
+    }
 
-    if (created) {
-      // Log business event
-      await BusinessEventLogger.logPurchaseEvent('created', {
-        promptId: prompt.id,
-        userId: buyerId,
-        amount: price,
-        stripeSessionId: session.id,
-      });
+    if (input.stripePaymentIntentId && !purchase.stripe_payment_intent_id) {
+      updates.stripe_payment_intent_id = input.stripePaymentIntentId;
+    }
 
-      // Update seller credits
-      await updateSellerCredits(supabase, finalSellerId, price, requestId);
+    if (!purchase.amount_total || purchase.amount_total !== input.amountTotal) {
+      updates.amount_total = input.amountTotal;
+    }
 
-      logger.info('Purchase created and credits updated', {
+    if (!purchase.currency || purchase.currency !== input.currency) {
+      updates.currency = input.currency;
+    }
+
+    if (purchase.status !== targetStatus) {
+      updates.status = targetStatus;
+    }
+
+    if (
+      input.priceCents &&
+      (!purchase.amount_total || purchase.amount_total === 0)
+    ) {
+      updates.price = Number((input.priceCents / 100).toFixed(2));
+    }
+
+    const shouldUpdate = Object.keys(updates).length > 0;
+    if (shouldUpdate) {
+      const { error } = await supabase
+        .from('purchases')
+        .update(updates)
+        .eq('id', purchase.id);
+
+      if (error) {
+        throw new AppError(
+          ErrorCategory.EXTERNAL,
+          'DATABASE_ERROR',
+          'Failed to update purchase',
+          { details: error.message }
+        );
+      }
+
+      logger.info('Purchase reconciled from Stripe event', {
         requestId,
-        purchaseId,
-        buyerId,
-        sellerId: finalSellerId,
-        promptId,
-        amount: price,
-      }, 'PURCHASE_COMPLETED');
+        purchaseId: purchase.id,
+        status: targetStatus,
+        updates,
+      }, 'PURCHASE_UPDATED');
     } else {
-      logger.info('Purchase already existed, skipping credit update', {
+      logger.info('Purchase already up to date for Stripe event', {
         requestId,
-        purchaseId,
-        buyerId,
-        promptId,
-      }, 'PURCHASE_ALREADY_EXISTS');
+        purchaseId: purchase.id,
+      }, 'PURCHASE_ALREADY_CURRENT');
     }
 
-  } catch (error) {
-    logger.error('Failed to process checkout completion', {
+    return purchase.id;
+  }
+
+  const priceCents = input.priceCents ?? input.amountTotal;
+  const insertPayload = {
+    buyer_id: input.buyerId,
+    seller_id: input.sellerId,
+    prompt_id: input.promptId,
+    stripe_checkout_session_id: input.stripeCheckoutSessionId ?? null,
+    stripe_payment_intent_id: input.stripePaymentIntentId ?? null,
+    amount_total: input.amountTotal,
+    refunded_amount: 0,
+    currency: input.currency,
+    status: input.status,
+    last_stripe_event_id: input.lastStripeEventId,
+    price: Number((priceCents / 100).toFixed(2)),
+    created_at: new Date().toISOString(),
+  };
+
+  const { data: inserted, error } = await supabase
+    .from('purchases')
+    .insert(insertPayload)
+    .select('id')
+    .maybeSingle();
+
+  if (error) {
+    if (error.code === '23505') {
+      const existing = await findPurchase(supabase, {
+        paymentIntentId: input.stripePaymentIntentId,
+        checkoutSessionId: input.stripeCheckoutSessionId,
+        buyerId: input.buyerId,
+        promptId: input.promptId,
+      });
+      return existing?.id ?? null;
+    }
+
+    throw new AppError(
+      ErrorCategory.EXTERNAL,
+      'DATABASE_ERROR',
+      'Failed to create purchase',
+      { details: error.message }
+    );
+  }
+
+  if (!inserted?.id) return null;
+
+  logger.info('Purchase created from Stripe event', {
+    requestId,
+    purchaseId: inserted.id,
+    status: input.status,
+  }, 'PURCHASE_CREATED');
+
+  return inserted.id;
+}
+
+async function reconcileRefund(
+  supabase: SupabaseClient,
+  charge: Stripe.Charge,
+  eventId: string,
+  requestId: string,
+  stripeCreated?: number
+) {
+  const paymentIntentId =
+    typeof charge.payment_intent === 'string'
+      ? charge.payment_intent
+      : charge.payment_intent?.id ?? null;
+  const checkoutSessionId =
+    charge.metadata?.stripe_checkout_session_id ??
+    charge.metadata?.checkout_session_id ??
+    null;
+  const purchaseId = charge.metadata?.purchase_id ?? null;
+  const refundedAmount = charge.amount_refunded ?? 0;
+  const totalAmount = charge.amount ?? refundedAmount;
+  const refundReason =
+    charge.refunds?.data?.[0]?.reason ??
+    charge.refunds?.data?.[0]?.metadata?.reason ??
+    charge.metadata?.refund_reason ??
+    null;
+
+  let purchase = await findPurchase(supabase, {
+    purchaseId,
+    paymentIntentId,
+    checkoutSessionId,
+  });
+
+  if (!purchase && charge.metadata?.prompt_id && charge.metadata?.buyer_id && charge.metadata?.seller_id) {
+    await upsertPurchaseFromStripe(
+      supabase,
+      {
+        buyerId: charge.metadata.buyer_id,
+        sellerId: charge.metadata.seller_id,
+        promptId: charge.metadata.prompt_id,
+        stripeCheckoutSessionId: checkoutSessionId ?? undefined,
+        stripePaymentIntentId: paymentIntentId ?? undefined,
+        amountTotal: totalAmount,
+        currency: charge.currency,
+        status: refundedAmount >= totalAmount ? 'refunded' : 'partially_refunded',
+        lastStripeEventId: eventId,
+        priceCents: totalAmount,
+      },
+      requestId
+    );
+    purchase = await findPurchase(supabase, {
+      purchaseId,
+      paymentIntentId,
+      checkoutSessionId,
+      buyerId: charge.metadata.buyer_id,
+      promptId: charge.metadata.prompt_id,
+    });
+  }
+
+  if (!purchase) {
+    logger.warn('Refund received but purchase not found', {
       requestId,
-      sessionId: session.id,
-    }, error as Error, 'CHECKOUT_PROCESSING_FAILED');
-    
-    throw error;
+      paymentIntentId,
+      checkoutSessionId,
+      purchaseId,
+    }, STRIPE_HANDLER_LABELS.refundApplied);
+    return;
+  }
+
+  const currentRefunded = purchase.refunded_amount ?? 0;
+  const amountTotal = purchase.amount_total && purchase.amount_total > 0 ? purchase.amount_total : totalAmount;
+  const nextRefundedAmount = Math.max(currentRefunded, refundedAmount);
+  const computedStatus =
+    nextRefundedAmount >= amountTotal && amountTotal > 0
+      ? 'refunded'
+      : 'partially_refunded';
+  const targetStatus = prioritizeStatus(purchase.status, computedStatus as PurchaseStatus);
+
+  const updates: Record<string, any> = {
+    refunded_amount: nextRefundedAmount,
+    amount_total: amountTotal,
+    status: targetStatus,
+    refund_reason: refundReason ?? purchase.refund_reason ?? null,
+    refunded_at: stripeTimestampToIso(stripeCreated),
+    last_stripe_event_id: eventId,
+    stripe_payment_intent_id: paymentIntentId ?? purchase.stripe_payment_intent_id,
+  };
+
+  const { error } = await supabase
+    .from('purchases')
+    .update(updates)
+    .eq('id', purchase.id);
+
+  if (error) {
+    throw new AppError(
+      ErrorCategory.EXTERNAL,
+      'DATABASE_ERROR',
+      'Failed to apply refund to purchase',
+      { details: error.message }
+    );
+  }
+
+  logger.info('Refund reconciled to purchase', {
+    requestId,
+    purchaseId: purchase.id,
+    status: targetStatus,
+    refundedAmount: nextRefundedAmount,
+    amountTotal,
+  }, STRIPE_HANDLER_LABELS.refundApplied);
+
+  try {
+    const humanAmount = nextRefundedAmount / 100;
+    const title =
+      targetStatus === 'refunded'
+        ? 'Refund processed'
+        : 'Partial refund processed';
+    await createNotification(supabase, {
+      userId: purchase.buyer_id,
+      type: 'refund.processed',
+      title,
+      body: `A refund of ${humanAmount} ${charge.currency} was processed for your purchase.`,
+      url: '/purchases',
+      requestId,
+    });
+  } catch (notifyError) {
+    logger.warn('Failed to notify buyer about refund', {
+      requestId,
+      purchaseId: purchase.id,
+      error: (notifyError as Error)?.message,
+    }, 'REFUND_NOTIFICATION_FAILED');
   }
 }
 
-/**
- * Handle payment_intent.succeeded events
- */
-async function handlePaymentIntentSucceeded(
-  supabase: any,
-  intent: any,
-  requestId: string
-): Promise<void> {
-  try {
-    logger.info('Processing payment_intent.succeeded', {
-      requestId,
-      paymentIntentId: intent.id,
-      amount: intent.amount_received,
-    }, 'PAYMENT_INTENT_SUCCEEDED_START');
+async function handleCheckoutCompleted(
+  supabase: SupabaseClient,
+  session: Stripe.Checkout.Session,
+  eventId: string,
+  requestId: string,
+  stripeCreated?: number
+) {
+  const { promptId, buyerId, sellerId } = StripeWebhookHandler.validatePurchaseMetadata(session);
+  const amountTotal = session.amount_total ?? session.amount_subtotal;
 
-    const promptId = StripeWebhookHandler.extractMetadata(intent.metadata, ['prompt_id', 'promptId']);
-    const buyerId = StripeWebhookHandler.extractMetadata(intent.metadata, ['user_id', 'buyer_id', 'buyerId', 'userId']);
+  if (!amountTotal || amountTotal <= 0) {
+    throw new AppError(
+      ErrorCategory.VALIDATION,
+      'INVALID_AMOUNT',
+      'Checkout session missing amount_total',
+      { sessionId: session.id },
+      400
+    );
+  }
 
-    if (!promptId || !buyerId) {
-      logger.warn('Missing required metadata on payment_intent.succeeded', {
-        requestId,
-        paymentIntentId: intent.id,
-        promptId,
-        buyerId,
-      }, 'PAYMENT_METADATA_MISSING');
-      return;
-    }
+  const { data: prompt, error: promptError } = await supabase
+    .from('prompts')
+    .select('id, user_id, price')
+    .eq('id', promptId)
+    .maybeSingle();
 
-    // Fetch prompt
-    const { data: prompt, error: promptError } = await supabase
-      .from('prompts')
-      .select('id, user_id, price')
-      .eq('id', promptId)
-      .single();
+  if (promptError || !prompt) {
+    throw new AppError(
+      ErrorCategory.RESOURCE,
+      'PROMPT_NOT_FOUND',
+      `Prompt ${promptId} not found`,
+      { details: promptError?.message },
+      404
+    );
+  }
 
+  const finalSellerId = sellerId || prompt.user_id;
+  if (!finalSellerId) {
+    throw new AppError(
+      ErrorCategory.RESOURCE,
+      'SELLER_NOT_FOUND',
+      'No seller found for prompt',
+      { promptId },
+      404
+    );
+  }
 
-    if (promptError) {
-      throw new AppError('PROMPT_NOT_FOUND', `Prompt ${promptId} not found`, 404, {
-        details: promptError.message
-      });
-    }
+  const paymentIntentId =
+    typeof session.payment_intent === 'string'
+      ? session.payment_intent
+      : (session.payment_intent as Stripe.PaymentIntent | null)?.id ?? null;
 
-    const finalSellerId = prompt.user_id;
-    const amount = StripeWebhookHandler.centsToDollars(intent.amount_received ?? intent.amount ?? null);
-    const price = amount ?? (prompt.price !== null ? Number(prompt.price) : null);
-
-    if (!price) {
-      throw new AppError('INVALID_PRICE', 'No valid price found for payment intent', 400, {
-        intentAmount: intent.amount_received,
-        promptPrice: prompt.price
-      });
-    }
-
-    // Create purchase
-    const purchaseData: PurchaseCreationData = {
+  await upsertPurchaseFromStripe(
+    supabase,
+    {
       buyerId,
       sellerId: finalSellerId,
       promptId: prompt.id,
-      stripeSessionId: intent.id, // Use payment intent ID as session ID
-      amount: price,
-      currency: intent.currency || 'usd',
-    };
+      stripeCheckoutSessionId: session.id,
+      stripePaymentIntentId: paymentIntentId ?? undefined,
+      amountTotal,
+      currency: session.currency || 'usd',
+      status: 'paid',
+      lastStripeEventId: eventId,
+      priceCents: amountTotal,
+    },
+    requestId
+  );
 
-    const { created } = await webhookHandler.createPurchase(supabase, purchaseData);
-
-    if (created) {
-      await updateSellerCredits(supabase, finalSellerId, price, requestId);
-
-      logger.info('Payment intent purchase processed successfully', {
-        requestId,
-        buyerId,
-        sellerId: finalSellerId,
-        promptId,
-        amount: price,
-      }, 'PAYMENT_PURCHASE_COMPLETED');
-    }
-
-  } catch (error) {
-    logger.error('Failed to process payment intent success', {
-      requestId,
-      paymentIntentId: intent.id,
-    }, error as Error, 'PAYMENT_INTENT_PROCESSING_FAILED');
-    
-    throw error;
-  }
+  logger.info('Checkout session handled', {
+    requestId,
+    sessionId: session.id,
+    promptId,
+    buyerId,
+    sellerId: finalSellerId,
+    amountTotal,
+    stripeCreatedAt: stripeTimestampToIso(stripeCreated),
+  }, STRIPE_HANDLER_LABELS.checkoutCompleted);
 }
 
-/**
- * Handle payment_intent.payment_failed events
- */
-async function handlePaymentIntentFailed(
-  supabase: any,
-  intent: any,
+async function handlePaymentIntentSucceeded(
+  supabase: SupabaseClient,
+  intent: Stripe.PaymentIntent,
+  eventId: string,
   requestId: string
-): Promise<void> {
-  try {
-    const promptId = StripeWebhookHandler.extractMetadata(intent.metadata, ['prompt_id', 'promptId']);
-    const buyerId = StripeWebhookHandler.extractMetadata(intent.metadata, ['user_id', 'buyer_id', 'buyerId', 'userId']);
+) {
+  const promptId = StripeWebhookHandler.extractMetadata(intent.metadata, ['prompt_id', 'promptId']);
+  const buyerId = StripeWebhookHandler.extractMetadata(intent.metadata, ['user_id', 'buyer_id', 'buyerId', 'userId']);
 
-    logger.error('Payment intent failed', {
+  if (!promptId || !buyerId) {
+    logger.warn('Payment intent missing metadata, skipping purchase sync', {
       requestId,
       paymentIntentId: intent.id,
       promptId,
       buyerId,
-      failureCode: intent.last_payment_error?.code,
-      failureMessage: intent.last_payment_error?.message,
-    }, new Error(`Payment failed: ${intent.last_payment_error?.message || 'Unknown error'}`), 'PAYMENT_INTENT_FAILED');
-
-    // Log business event for failed purchase
-    if (promptId && buyerId) {
-      await BusinessEventLogger.logPurchaseEvent('failed', {
-        promptId,
-        userId: buyerId,
-        amount: 0, // No amount for failed payments
-        error: intent.last_payment_error?.message || 'Unknown payment failure',
-      });
-    }
-
-  } catch (error) {
-    logger.error('Failed to process payment intent failure', {
-      requestId,
-      paymentIntentId: intent.id,
-    }, error as Error, 'PAYMENT_FAILURE_PROCESSING_FAILED');
-    
-    // Don't throw - we want to acknowledge receipt even if logging fails
+    }, STRIPE_HANDLER_LABELS.paymentSucceeded);
+    return;
   }
+
+  const amountTotal = intent.amount_received ?? intent.amount;
+  if (!amountTotal || amountTotal <= 0) {
+    throw new AppError(
+      ErrorCategory.VALIDATION,
+      'INVALID_AMOUNT',
+      'Payment intent missing amount',
+      { paymentIntentId: intent.id },
+      400
+    );
+  }
+
+  const { data: prompt, error: promptError } = await supabase
+    .from('prompts')
+    .select('id, user_id')
+    .eq('id', promptId)
+    .maybeSingle();
+
+  if (promptError || !prompt) {
+    throw new AppError(
+      ErrorCategory.RESOURCE,
+      'PROMPT_NOT_FOUND',
+      `Prompt ${promptId} not found`,
+      { details: promptError?.message },
+      404
+    );
+  }
+
+  await upsertPurchaseFromStripe(
+    supabase,
+    {
+      buyerId,
+      sellerId: prompt.user_id,
+      promptId: prompt.id,
+      stripeCheckoutSessionId: undefined,
+      stripePaymentIntentId: intent.id,
+      amountTotal,
+      currency: intent.currency || 'usd',
+      status: 'paid',
+      lastStripeEventId: eventId,
+      priceCents: amountTotal,
+    },
+    requestId
+  );
 }
 
-/**
- * Handle transfer.created events
- */
-async function handleTransferCreated(
-  supabase: any,
-  transfer: any,
+async function handlePaymentIntentFailed(
+  supabase: SupabaseClient,
+  intent: Stripe.PaymentIntent,
+  eventId: string,
   requestId: string
-): Promise<void> {
-  try {
-    logger.info('Processing transfer.created', {
-      requestId,
-      transferId: transfer.id,
-      amount: transfer.amount,
-      destination: transfer.destination,
-    }, 'TRANSFER_CREATED_START');
+) {
+  const purchase = await findPurchase(supabase, {
+    paymentIntentId: intent.id,
+    buyerId: StripeWebhookHandler.extractMetadata(intent.metadata, ['user_id', 'buyer_id', 'buyerId', 'userId']),
+    promptId: StripeWebhookHandler.extractMetadata(intent.metadata, ['prompt_id', 'promptId']),
+  });
 
-    const { sellerId, accountId } = StripeWebhookHandler.validateTransferMetadata(transfer);
+  if (!purchase) return;
 
-    // If no seller ID in metadata, try to find by account ID
-    let finalSellerId = sellerId;
-    if (!finalSellerId && accountId) {
-      const { data: profile } = await supabase
-        .from('profiles')
-        .select('id')
-        .or(`stripe_account_id.eq.${accountId},connected_account_id.eq.${accountId}`)
-        .maybeSingle();
+  const { error } = await supabase
+    .from('purchases')
+    .update({
+      status: prioritizeStatus(purchase.status, 'failed'),
+      last_stripe_event_id: eventId,
+    })
+    .eq('id', purchase.id);
 
-      finalSellerId = profile?.id;
-    }
-
-    if (!finalSellerId) {
-      logger.warn('Could not resolve seller for transfer', {
-        requestId,
-        transferId: transfer.id,
-        accountId,
-        sellerId,
-      }, 'TRANSFER_SELLER_NOT_FOUND');
-      return;
-    }
-
-    // Create payout record
-    const payoutData: PayoutCreationData = {
-      sellerId: finalSellerId,
-      amount: StripeWebhookHandler.centsToDollars(transfer.amount),
-      currency: transfer.currency,
-      stripeTransferId: transfer.id,
-      destinationAccount: accountId,
-    };
-
-    const { created } = await webhookHandler.createPayout(supabase, payoutData);
-
-    if (created) {
-      logger.info('Payout created successfully', {
-        requestId,
-        sellerId: finalSellerId,
-        amount: payoutData.amount,
-        transferId: transfer.id,
-      }, 'PAYOUT_CREATED');
-    }
-
-  } catch (error) {
-    logger.error('Failed to process transfer', {
-      requestId,
-      transferId: transfer.id,
-    }, error as Error, 'TRANSFER_PROCESSING_FAILED');
-    
-    throw error;
+  if (error) {
+    throw new AppError(
+      ErrorCategory.EXTERNAL,
+      'DATABASE_ERROR',
+      'Failed to mark purchase failed',
+      { details: error.message }
+    );
   }
+
+  logger.warn('Payment intent marked as failed', {
+    requestId,
+    purchaseId: purchase.id,
+    paymentIntentId: intent.id,
+  }, 'PAYMENT_FAILED');
 }
 
-/**
- * Update seller credits atomically
- */
-async function updateSellerCredits(
-  supabase: any,
-  sellerId: string,
-  amount: number,
+async function handleDisputeCreated(
+  supabase: SupabaseClient,
+  dispute: Stripe.Dispute,
+  eventId: string,
   requestId: string
-): Promise<void> {
-  try {
-    const { data: profile, error: profileError } = await supabase
-      .from('profiles')
-      .select('credits')
-      .eq('id', sellerId)
-      .single();
+) {
+  const paymentIntentId =
+    typeof dispute.payment_intent === 'string'
+      ? dispute.payment_intent
+      : dispute.payment_intent?.id ?? null;
+  const chargeId =
+    typeof dispute.charge === 'string' ? dispute.charge : dispute.charge?.id ?? null;
 
-    if (profileError) {
-      throw new AppError('PROFILE_NOT_FOUND', `Seller profile ${sellerId} not found`, 404, {
-        details: profileError.message
-      });
-    }
+  const purchase = await findPurchase(supabase, {
+    paymentIntentId,
+    checkoutSessionId: dispute.metadata?.stripe_checkout_session_id ?? null,
+    purchaseId: dispute.metadata?.purchase_id ?? null,
+  });
 
-    const currentCredits = Number(profile.credits ?? 0);
-    const newCredits = currentCredits + amount;
-
-    const { error: updateError } = await supabase
-      .from('profiles')
-      .update({ credits: newCredits })
-      .eq('id', sellerId);
-
-    if (updateError) {
-      throw new AppError('CREDIT_UPDATE_FAILED', 'Failed to update seller credits', 500, {
-        details: updateError.message
-      });
-    }
-
-    logger.info('Seller credits updated', {
+  if (!purchase) {
+    logger.warn('Dispute received but purchase not found', {
       requestId,
-      sellerId,
-      previousCredits: currentCredits,
-      addedAmount: amount,
-      newCredits,
-    }, 'CREDITS_UPDATED');
+      paymentIntentId,
+      chargeId,
+    }, STRIPE_HANDLER_LABELS.disputeCreated);
+    return;
+  }
 
-  } catch (error) {
-    logger.error('Failed to update seller credits', {
-      requestId,
-      sellerId,
-      amount,
-    }, error as Error, 'CREDIT_UPDATE_FAILED');
-    
-    throw error;
+  const { error } = await supabase
+    .from('purchases')
+    .update({
+      status: prioritizeStatus(purchase.status, 'disputed'),
+      last_stripe_event_id: eventId,
+    })
+    .eq('id', purchase.id);
+
+  if (error) {
+    throw new AppError(
+      ErrorCategory.EXTERNAL,
+      'DATABASE_ERROR',
+      'Failed to mark purchase disputed',
+      { details: error.message }
+    );
+  }
+
+  logger.warn('Purchase marked as disputed', {
+    requestId,
+    purchaseId: purchase.id,
+    paymentIntentId,
+    chargeId,
+  }, STRIPE_HANDLER_LABELS.disputeCreated);
+}
+
+async function processEvent(
+  supabase: SupabaseClient,
+  event: Stripe.Event,
+  requestId: string
+) {
+  switch (event.type) {
+    case 'checkout.session.completed':
+      await handleCheckoutCompleted(
+        supabase,
+        event.data.object as Stripe.Checkout.Session,
+        event.id,
+        requestId,
+        event.created
+      );
+      break;
+
+    case 'payment_intent.succeeded':
+      await handlePaymentIntentSucceeded(
+        supabase,
+        event.data.object as Stripe.PaymentIntent,
+        event.id,
+        requestId
+      );
+      break;
+
+    case 'payment_intent.payment_failed':
+      await handlePaymentIntentFailed(
+        supabase,
+        event.data.object as Stripe.PaymentIntent,
+        event.id,
+        requestId
+      );
+      break;
+
+    case 'charge.refunded':
+      await reconcileRefund(
+        supabase,
+        event.data.object as Stripe.Charge,
+        event.id,
+        requestId,
+        event.created
+      );
+      break;
+
+    case 'charge.dispute.created':
+      await handleDisputeCreated(
+        supabase,
+        event.data.object as Stripe.Dispute,
+        event.id,
+        requestId
+      );
+      break;
+
+    default:
+      logger.info('Unhandled Stripe event type', {
+        requestId,
+        eventType: event.type,
+        eventId: event.id,
+      }, 'UNHANDLED_STRIPE_EVENT');
   }
 }
 
-/**
- * Main webhook handler
- */
 export async function POST(req: NextRequest) {
   const requestId = crypto.randomUUID();
   const startTime = Date.now();
 
   try {
-    // Extract signature and raw body
     const signature = req.headers.get('stripe-signature');
-    const rawBody = await req.text();
+    const rawBody = Buffer.from(await req.arrayBuffer());
 
     if (!signature) {
-      logger.error('Missing Stripe signature header', {
-        requestId,
-      }, new Error('Missing Stripe signature'), 'MISSING_SIGNATURE');
-      
-      return NextResponse.json(
-        { error: 'Missing Stripe signature' }, 
-        { status: 400 }
-      );
+      logger.error('Missing Stripe signature header', { requestId }, new Error('Missing Stripe signature'), 'MISSING_SIGNATURE');
+      return NextResponse.json({ error: 'Missing Stripe signature' }, { status: 400 });
     }
 
-    // Verify signature (this must happen before any DB operations)
-    const event = await webhookHandler.verifySignature(rawBody, signature);
+    const webhookHandler = getWebhookHandler();
+    const event = webhookHandler.verifySignature(rawBody, signature, requestId);
+    const supabase = await createSupabaseAdminClient();
 
-    // Initialize Supabase client for this request
-    const supabase = await createSupabaseServerClient();
-
-    // Check if event was already processed (idempotency)
-    if (await webhookHandler.isEventProcessed(supabase, event.id)) {
-      logger.info('Event already processed, skipping', {
+    const eventRecord = await recordStripeEvent(supabase, event, requestId);
+    if (eventRecord.alreadyProcessed) {
+      logger.info('Stripe event already processed, skipping', {
         requestId,
         eventId: event.id,
         eventType: event.type,
       }, 'EVENT_ALREADY_PROCESSED');
 
-      return NextResponse.json({ 
-        received: true, 
-        duplicate: true,
-        requestId 
-      }, { status: 200 });
+      return NextResponse.json({ received: true, duplicate: true, requestId }, { status: 200 });
     }
 
-    // Process the event
-    logger.info('Processing Stripe webhook event', {
-      requestId,
-      eventId: event.id,
-      eventType: event.type,
-      eventCreated: event.created,
-    }, 'WEBHOOK_EVENT_PROCESSING_START');
-
-    switch (event.type) {
-      case 'checkout.session.completed':
-        await handleCheckoutCompleted(supabase, event.data.object, requestId);
-        break;
-        
-      case 'payment_intent.succeeded':
-        await handlePaymentIntentSucceeded(supabase, event.data.object, requestId);
-        break;
-        
-      case 'payment_intent.payment_failed':
-        await handlePaymentIntentFailed(supabase, event.data.object, requestId);
-        break;
-        
-      case 'transfer.created':
-        await handleTransferCreated(supabase, event.data.object, requestId);
-        break;
-        
-      default:
-        logger.info('Unhandled event type', {
-          requestId,
-          eventType: event.type,
-          eventId: event.id,
-        }, 'UNHANDLED_EVENT_TYPE');
-    }
-
-    // Mark event as processed (must be after successful processing)
-    await webhookHandler.markEventProcessed(supabase, event);
-
-    // Log business event
+    await processEvent(supabase, event, requestId);
+    await markStripeEventProcessed(supabase, event, requestId);
     await BusinessEventLogger.logStripeWebhook(event.type, event.id, 'success');
 
     const duration = Date.now() - startTime;
-    
-    logger.info('Webhook processed successfully', {
+    logger.info('Stripe webhook processed', {
       requestId,
       eventId: event.id,
       eventType: event.type,
       duration,
     }, 'WEBHOOK_PROCESSED_SUCCESS');
 
-    return NextResponse.json({ 
-      received: true,
-      requestId,
-      duration
-    }, { status: 200 });
-
+    return NextResponse.json({ received: true, requestId, duration }, { status: 200 });
   } catch (error: any) {
     const duration = Date.now() - startTime;
-    
-    // Log the error with full context
+
     logger.error('Webhook processing failed', {
       requestId,
       duration,
-      errorType: error.constructor.name,
-      errorMessage: error.message,
+      errorType: error?.constructor?.name,
+      errorMessage: error?.message,
     }, error as Error, 'WEBHOOK_PROCESSING_FAILED');
 
-    // Determine response status code
     let statusCode = 500;
     let errorMessage = 'Webhook processing failed';
 
     if (isOperationalError(error)) {
-      const appError = error as any;
-      statusCode = appError.statusCode || 500;
-      errorMessage = appError.message || 'Processing error';
-      
-      // Don't retry for client errors (4xx)
-      if (statusCode >= 400 && statusCode < 500) {
-        logger.warn('Client error in webhook, not retrying', {
-          requestId,
-          statusCode,
-          errorMessage,
-        }, 'CLIENT_ERROR_NO_RETRY');
-      }
+      statusCode = (error as AppError).statusCode || 500;
+      errorMessage = (error as AppError).message;
     }
 
-    // Log business event for failure
     try {
-      await BusinessEventLogger.logStripeWebhook(
-        'unknown', // We don't know the event type if processing failed
-        'unknown',
-        'failed'
-      );
-    } catch (businessLogError) {
-      logger.error('Failed to log business event for webhook failure', {
-        requestId,
-      }, businessLogError as Error, 'BUSINESS_LOG_FAILED');
+      await BusinessEventLogger.logStripeWebhook('unknown', 'unknown', 'failed');
+    } catch (logError) {
+      logger.error('Failed to log webhook failure business event', { requestId }, logError as Error, 'WEBHOOK_BUSINESS_LOG_FAILED');
     }
 
-    return NextResponse.json({ 
-      error: errorMessage,
-      requestId,
-      duration,
-      retry: statusCode >= 500 // Only retry on server errors
-    }, { status: statusCode });
+    return NextResponse.json(
+      {
+        error: errorMessage,
+        requestId,
+        duration,
+        retry: statusCode >= 500,
+      },
+      { status: statusCode }
+    );
   }
 }

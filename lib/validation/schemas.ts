@@ -37,10 +37,12 @@ export const createSwapSchema = z.object({
   responder_id: z.string().uuid('Invalid responder ID'),
 });
 
-
-
 export const updateSwapStatusSchema = z.object({
   status: z.enum(['accepted', 'rejected']),
+});
+
+export const swapActionSchema = z.object({
+  action: z.enum(['accept', 'decline', 'cancel', 'fulfill']),
 });
 
 // Admin moderation validation schemas
@@ -105,6 +107,13 @@ export const adminRefundActionSchema = z.object({
   partial_amount: z.number().positive('Partial amount must be positive').optional(),
 });
 
+// Admin refund initiation schema
+export const adminRefundInitiateSchema = z.object({
+  purchaseId: z.string().uuid('Invalid purchase ID'),
+  amount: z.number().positive('Amount must be positive').optional(),
+  reason: z.string().max(500, 'Reason too long').optional(),
+});
+
 // Export all schemas as a union type for dynamic validation
 export const AllValidationSchemas = {
   createPrompt: createPromptSchema,
@@ -118,6 +127,7 @@ export const AllValidationSchemas = {
   enableCreator: enableCreatorSchema,
   createCheckoutSession: createCheckoutSessionSchema,
   connectStripe: connectStripeSchema,
+  adminRefundInitiate: adminRefundInitiateSchema,
 } as const;
 
 export type ValidationSchemaKey = keyof typeof AllValidationSchemas;

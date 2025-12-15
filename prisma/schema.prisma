@@ -75,6 +75,7 @@ model Profile {
   subscription_status String?
   createdAt           DateTime? @default(now()) @map("created_at") @db.Timestamptz(6)
   stripeAccountId     String?   @map("stripe_account_id")
+  isAdmin             Boolean?  @default(false) @map("is_admin")
   user                User      @relation(fields: [id], references: [id], onDelete: Cascade, onUpdate: NoAction)
 
   @@map("profiles")
@@ -528,12 +529,12 @@ model Purchase {
   sellerId                         String   @map("seller_id") @db.Uuid
   promptId                         Int      @map("prompt_id")
   price                            Decimal  @default(0) @db.Decimal(10, 2)
-  stripePaymentIntentId            String?  @map("stripe_payment_intent_id")
-  stripeCheckoutSessionId          String   @map("stripe_checkout_session_id")
+  stripePaymentIntentId            String?  @unique(map: "purchases_stripe_payment_intent_uidx") @map("stripe_payment_intent_id")
+  stripeCheckoutSessionId          String?  @unique(map: "purchases_stripe_checkout_session_uidx") @map("stripe_checkout_session_id")
   status                           String   @default("pending")
-  amountTotal                      Decimal  @map("amount_total") @db.Decimal(10, 2)
+  amountTotal                      Int      @default(0) @map("amount_total") @db.Integer
   currency                         String   @default("usd")
-  refundedAmount                   Decimal  @map("refunded_amount") @db.Decimal(10, 2)
+  refundedAmount                   Int      @default(0) @map("refunded_amount") @db.Integer
   refundedAt                       DateTime? @map("refunded_at") @db.Timestamptz(6)
   refundReason                     String?  @map("refund_reason")
   lastStripeEventId                String?  @map("last_stripe_event_id")
@@ -547,11 +548,9 @@ model Purchase {
   @@index([promptId], map: "purchases_prompt_idx")
   @@index([sellerId], map: "purchases_seller_idx")
   @@index([status], map: "purchases_status_idx")
-  @@index([stripeCheckoutSessionId], map: "purchases_session_idx")
   @@map("purchases")
   @@schema("public")
 }
-
 
 model PromptRating {
   id        String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
@@ -569,11 +568,36 @@ model PromptRating {
   @@schema("public")
 }
 
+model RefundRequest {
+  id               String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  purchaseId       String    @map("purchase_id") @db.Uuid
+  requesterUserId  String    @map("requester_user_id") @db.Uuid
+  reason           String
+  requestedAmount  Int?      @map("requested_amount") @db.Integer
+  status           String    @default("open")
+  adminId          String?   @map("admin_id") @db.Uuid
+  adminReason      String?   @map("admin_reason")
+  stripeRefundId   String?   @map("stripe_refund_id")
+  finalAmount      Int?      @map("final_amount") @db.Integer
+  createdAt        DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  processedAt      DateTime? @map("processed_at") @db.Timestamptz(6)
+  ipAddress        String?   @map("ip_address")
+  userAgent        String?   @map("user_agent")
+  purchase         Purchase  @relation(fields: [purchaseId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([purchaseId], map: "idx_refund_requests_purchase_id")
+  @@index([requesterUserId], map: "idx_refund_requests_user_id")
+  @@index([status], map: "idx_refund_requests_status")
+  @@index([adminId], map: "idx_refund_requests_admin_id")
+  @@map("refund_requests")
+  @@schema("public")
+}
+
 model Refund {
   id                   String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   purchaseId           String   @map("purchase_id") @db.Uuid
   stripeRefundId       String   @unique @map("stripe_refund_id")
-  amount               Decimal  @db.Decimal(10, 2)
+  amount               Int      @db.Integer
   currency             String   @default("usd")
   reason               String?
   status               String   @default("pending")
@@ -590,6 +614,21 @@ model Refund {
   @@schema("public")
 }
 
+model Notification {
+  id         String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId     String   @map("user_id") @db.Uuid
+  type       String
+  title      String
+  body       String
+  url        String?
+  isRead     Boolean  @default(false) @map("is_read")
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  user       Profile? @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([userId], map: "idx_notifications_user_id")
+  @@schema("public")
+}
+
 model StripeEvent {
   id              String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   eventId         String    @unique @map("event_id")
@@ -599,6 +638,8 @@ model StripeEvent {
   livemode        Boolean   @default(false)
   payloadHash     String?   @map("payload_hash")
   requestId       String?   @map("request_id")
+  stripeCreatedAt DateTime? @map("stripe_created_at") @db.Timestamptz(6)
+  payload         Json?     @db.Json
 
   @@index([eventId], map: "idx_stripe_events_event_id")
   @@index([processedAt], map: "idx_stripe_events_processed_at")
