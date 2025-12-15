@@ -1,5 +1,15 @@
 {
   "version": 2,
   "framework": "nextjs",
-  "buildCommand": "npm run vercel-build"
+  "buildCommand": "npm run vercel-build",
+  "crons": [
+    {
+      "path": "/api/cron/expire-swaps",
+      "schedule": "0 * * * *"
+    },
+    {
+      "path": "/api/cron/cleanup",
+      "schedule": "0 3 * * *"
+    }
+  ]
 }
