@@ -2,6 +2,8 @@ import type { NextRequest } from 'next/server';
 import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import type { GenericSupabaseClient } from '@/lib/supabase-types';
+import { adminModerationSchema } from '@/lib/validation/schemas';
+import { createSuccessResponse, createErrorResponse } from '@/lib/api/responses';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -50,19 +52,27 @@ export async function GET(req: NextRequest) {
   const supabaseAdmin = getSupabaseAdmin();
   if (!supabaseAdmin) {
     return NextResponse.json(
-      { error: 'Server misconfigured: Supabase URL and service role key are required for admin routes.' },
+      createErrorResponse('SERVER_ERROR', 'Server misconfigured: Supabase URL and service role key are required for admin routes.'),
       { status: 500 },
     );
   }
 
   const user = await getUser(req, supabaseAdmin);
-  if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  if (!user) {
+    return NextResponse.json(
+      createErrorResponse('UNAUTHORIZED', 'Authentication required'),
+      { status: 401 }
+    );
+  }
 
   try {
     await assertAdmin(user.id, supabaseAdmin);
   } catch (err: any) {
     const status = err.message === 'Forbidden' ? 403 : 500;
-    return NextResponse.json({ error: err.message ?? 'Forbidden' }, { status });
+    return NextResponse.json(
+      createErrorResponse('FORBIDDEN', err.message ?? 'Admin access required'),
+      { status }
+    );
   }
 
   try {
@@ -93,64 +103,111 @@ export async function GET(req: NextRequest) {
       console.warn('Flagged fetch error', flaggedRes.error);
     }
 
-    return NextResponse.json({
-      pendingPrompts: pendingRes.data ?? [],
-      transactions: txRes.data ?? [],
-      flagged: flaggedRes.data ?? [],
-    });
+    return NextResponse.json(
+      createSuccessResponse({
+        pendingPrompts: pendingRes.data ?? [],
+        transactions: txRes.data ?? [],
+        flagged: flaggedRes.data ?? [],
+      })
+    );
   } catch (err: any) {
-    return NextResponse.json({ error: err.message ?? 'Failed to load admin data' }, { status: 500 });
+    return NextResponse.json(
+      createErrorResponse('DATABASE_ERROR', err.message ?? 'Failed to load admin data'),
+      { status: 500 }
+    );
   }
 }
-
-type ActionBody =
-  | { action: 'approve'; promptId: string }
-  | { action: 'reject'; promptId: string }
-  | { action: 'ban'; userId: string };
 
 export async function POST(req: NextRequest) {
   const supabaseAdmin = getSupabaseAdmin();
   if (!supabaseAdmin) {
     return NextResponse.json(
-      { error: 'Server misconfigured: Supabase URL and service role key are required for admin routes.' },
+      createErrorResponse('SERVER_ERROR', 'Server misconfigured: Supabase URL and service role key are required for admin routes.'),
       { status: 500 },
     );
   }
 
   const user = await getUser(req, supabaseAdmin);
-  if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  if (!user) {
+    return NextResponse.json(
+      createErrorResponse('UNAUTHORIZED', 'Authentication required'),
+      { status: 401 }
+    );
+  }
 
   try {
     await assertAdmin(user.id, supabaseAdmin);
   } catch (err: any) {
     const status = err.message === 'Forbidden' ? 403 : 500;
-    return NextResponse.json({ error: err.message ?? 'Forbidden' }, { status });
+    return NextResponse.json(
+      createErrorResponse('FORBIDDEN', err.message ?? 'Admin access required'),
+      { status }
+    );
   }
 
-  let body: ActionBody;
+  // Parse and validate request body
+  let body: any;
   try {
     body = await req.json();
   } catch {
-    return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 });
+    return NextResponse.json(
+      createErrorResponse('INVALID_JSON', 'Invalid JSON in request body'),
+      { status: 400 }
+    );
   }
 
+  // Validate input using Zod schema
+  const validation = adminModerationSchema.safeParse(body);
+  if (!validation.success) {
+    return NextResponse.json(
+      createErrorResponse('VALIDATION_ERROR', 'Invalid input data', validation.error.format()),
+      { status: 400 }
+    );
+  }
+
+  const { action, promptId, userId } = validation.data;
+
   try {
-    if (body.action === 'approve') {
-      await supabaseAdmin.from('prompts').update({ is_public: true }).eq('id', body.promptId);
-    } else if (body.action === 'reject') {
-      await supabaseAdmin.from('prompts').update({ is_public: false }).eq('id', body.promptId);
-    } else if (body.action === 'ban') {
+    if (action === 'approve' && promptId) {
+      const { error } = await supabaseAdmin
+        .from('prompts')
+        .update({ is_public: true })
+        .eq('id', promptId);
+      if (error) throw error;
+      
+      return NextResponse.json(
+        createSuccessResponse({ message: 'Prompt approved successfully', promptId })
+      );
+    } else if (action === 'reject' && promptId) {
+      const { error } = await supabaseAdmin
+        .from('prompts')
+        .update({ is_public: false })
+        .eq('id', promptId);
+      if (error) throw error;
+      
+      return NextResponse.json(
+        createSuccessResponse({ message: 'Prompt rejected successfully', promptId })
+      );
+    } else if (action === 'ban' && userId) {
       const { error } = await supabaseAdmin
         .from('profiles')
         .update({ is_banned: true })
-        .eq('id', body.userId);
+        .eq('id', userId);
       if (error) throw error;
+      
+      return NextResponse.json(
+        createSuccessResponse({ message: 'User banned successfully', userId })
+      );
     } else {
-      return NextResponse.json({ error: 'Unsupported action' }, { status: 400 });
+      return NextResponse.json(
+        createErrorResponse('INVALID_ACTION', 'Unsupported action or missing required parameters'),
+        { status: 400 }
+      );
     }
-
-    return NextResponse.json({ ok: true });
   } catch (err: any) {
-    return NextResponse.json({ error: err.message ?? 'Failed to process action' }, { status: 500 });
+    return NextResponse.json(
+      createErrorResponse('DATABASE_ERROR', err.message ?? 'Failed to process action'),
+      { status: 500 }
+    );
   }
 }

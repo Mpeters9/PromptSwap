@@ -2,6 +2,8 @@ import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import type { GenericSupabaseClient } from '@/lib/supabase-types';
+import { swapActionSchema } from '@/lib/validation/schemas';
+import { createSuccessResponse, createErrorResponse } from '@/lib/api/responses';
 
 export const runtime = 'nodejs';
 
@@ -37,27 +39,42 @@ export async function PATCH(
   const supabaseAdmin = getSupabaseAdmin();
   if (!supabaseAdmin) {
     return NextResponse.json(
-      { error: 'Server misconfigured: Supabase URL and service role key are required for swap routes.' },
+      createErrorResponse('SERVER_ERROR', 'Server misconfigured: Supabase URL and service role key are required for swap routes.'),
       { status: 500 },
     );
   }
 
   const userId = await getUserId(req, supabaseAdmin);
-  if (!userId) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  if (!userId) {
+    return NextResponse.json(
+      createErrorResponse('UNAUTHORIZED', 'Authentication required'),
+      { status: 401 }
+    );
+  }
 
   const { id } = await context.params;
 
-  let body: { status?: 'accepted' | 'rejected' };
+  // Parse and validate request body
+  let body: any;
   try {
     body = await req.json();
   } catch {
-    return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 });
+    return NextResponse.json(
+      createErrorResponse('INVALID_JSON', 'Invalid JSON in request body'),
+      { status: 400 }
+    );
   }
 
-  const status = body.status;
-  if (!status || !['accepted', 'rejected'].includes(status)) {
-    return NextResponse.json({ error: 'status must be accepted or rejected' }, { status: 400 });
+  // Validate input using Zod schema
+  const validation = swapActionSchema.safeParse(body);
+  if (!validation.success) {
+    return NextResponse.json(
+      createErrorResponse('VALIDATION_ERROR', 'Invalid input data', validation.error.format()),
+      { status: 400 }
+    );
   }
+
+  const { status } = validation.data;
 
   // Fetch swap
   const { data: swap, error: swapError } = await supabaseAdmin
@@ -67,19 +84,31 @@ export async function PATCH(
     .single();
 
   if (swapError || !swap) {
-    return NextResponse.json({ error: 'Swap not found' }, { status: 404 });
+    return NextResponse.json(
+      createErrorResponse('SWAP_NOT_FOUND', 'Swap not found'),
+      { status: 404 }
+    );
   }
 
   if (swap.requester_id !== userId && swap.responder_id !== userId) {
-    return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+    return NextResponse.json(
+      createErrorResponse('FORBIDDEN', 'You can only modify your own swaps'),
+      { status: 403 }
+    );
   }
 
   if (swap.status !== 'pending') {
-    return NextResponse.json({ error: 'Swap is already resolved' }, { status: 400 });
+    return NextResponse.json(
+      createErrorResponse('INVALID_STATUS', 'Swap is already resolved'),
+      { status: 400 }
+    );
   }
 
   if (status === 'accepted' && swap.responder_id !== userId) {
-    return NextResponse.json({ error: 'Only the responder can accept a swap' }, { status: 403 });
+    return NextResponse.json(
+      createErrorResponse('FORBIDDEN', 'Only the responder can accept a swap'),
+      { status: 403 }
+    );
   }
 
   if (status === 'accepted') {
@@ -91,7 +120,10 @@ export async function PATCH(
       supabaseAdmin,
     );
     if (copyResult.error) {
-      return NextResponse.json({ error: copyResult.error }, { status: 500 });
+      return NextResponse.json(
+        createErrorResponse('COPY_FAILED', copyResult.error),
+        { status: 500 }
+      );
     }
   }
 
@@ -101,10 +133,15 @@ export async function PATCH(
     .eq('id', id);
 
   if (updateError) {
-    return NextResponse.json({ error: updateError.message }, { status: 500 });
+    return NextResponse.json(
+      createErrorResponse('DATABASE_ERROR', updateError.message),
+      { status: 500 }
+    );
   }
 
-  return NextResponse.json({ status });
+  return NextResponse.json(
+    createSuccessResponse({ status, swapId: id })
+  );
 }
 
 async function copyPromptsBetweenUsers(

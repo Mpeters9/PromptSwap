@@ -1,19 +1,19 @@
+
 import { NextResponse } from "next/server";
 import Stripe from "stripe";
-import { createClient } from "@supabase/supabase-js";
+import { createSupabaseServerClient, getCurrentUser } from '@/lib/supabase/server';
+import { createCheckoutSessionSchema } from '@/lib/validation/schemas';
+import { 
+  createSuccessResponse, 
+  createErrorResponse, 
+  createValidationErrorResponse, 
+  createAuthErrorResponse, 
+  createNotFoundErrorResponse,
+  createServerErrorResponse,
+  ErrorCodes 
+} from '@/lib/api/responses';
 
 export const runtime = "nodejs";
-
-function getSupabaseClient() {
-  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL?.trim();
-  const supabaseServiceKey = process.env.NEXT_PRIVATE_SUPABASE_SERVICE_ROLE_KEY?.trim();
-
-  if (!supabaseUrl || !supabaseServiceKey) {
-    return null;
-  }
-
-  return createClient(supabaseUrl, supabaseServiceKey);
-}
 
 function getStripeClient() {
   const stripeSecretKey = process.env.STRIPE_SECRET_KEY;
@@ -23,44 +23,70 @@ function getStripeClient() {
   return new Stripe(stripeSecretKey, { apiVersion: '2024-04-10' });
 }
 
-// Payload shape expected from components/BuyButton.tsx
-type CheckoutRequestBody = {
-  prompt_id: string;
-  title: string;
-  price: number;   // in cents
-  user_id?: string;
-};
-
 export async function POST(req: Request) {
-  const supabase = getSupabaseClient();
-  if (!supabase) {
-    return NextResponse.json(
-      { error: "Server misconfigured: Supabase URL and service role key are required for checkout." },
-      { status: 500 },
-    );
-  }
-
-  const stripe = getStripeClient();
-  if (!stripe) {
-    return NextResponse.json(
-      { error: "Server misconfigured: STRIPE_SECRET_KEY is missing. Set it in .env.local." },
-      { status: 500 },
-    );
-  }
-
   try {
-    const body = (await req.json()) as CheckoutRequestBody;
+    // Get current user (optional for checkout)
+    const user = await getCurrentUser();
+    
+    const stripe = getStripeClient();
+    if (!stripe) {
+      return NextResponse.json(createErrorResponse(
+        ErrorCodes.SERVER_ERROR,
+        "Server misconfigured: STRIPE_SECRET_KEY is missing"
+      ), { status: 500 });
+    }
 
-    const promptId = body?.prompt_id;
-    const title = body?.title;
+    // Parse and validate request body
+    let body;
+    try {
+      body = await req.json();
+    } catch {
+      return NextResponse.json(createErrorResponse(
+        ErrorCodes.VALIDATION_ERROR,
+        'Invalid JSON in request body'
+      ), { status: 400 });
+    }
+
+    // Validate input using Zod schema
+    const validationResult = createCheckoutSessionSchema.safeParse(body);
+    if (!validationResult.success) {
+      return NextResponse.json(
+        createValidationErrorResponse(validationResult.error.issues),
+        { status: 400 }
+      );
+    }
+
+    const { prompt_id: promptId, success_url, cancel_url } = validationResult.data;
     const priceInCents = Number(body?.price);
 
+    // Validate required fields from original code
+    const title = body?.title;
     if (!promptId || !title || !Number.isFinite(priceInCents) || priceInCents <= 0) {
-      console.error("[stripe] Invalid checkout payload", { body });
-      return NextResponse.json(
-        { error: "Missing or invalid prompt_id, title, or price" },
-        { status: 400 },
-      );
+      return NextResponse.json(createErrorResponse(
+        ErrorCodes.VALIDATION_ERROR,
+        'Missing or invalid prompt_id, title, or price'
+      ), { status: 400 });
+    }
+
+    // Verify prompt exists and get details
+    const supabase = await createSupabaseServerClient();
+    const { data: prompt, error: promptError } = await supabase
+      .from('prompts')
+      .select('id, title, user_id')
+      .eq('id', promptId)
+      .single();
+
+    if (promptError || !prompt) {
+      return NextResponse.json(createNotFoundErrorResponse('Prompt'), { status: 404 });
+    }
+
+    // Verify user owns the prompt or get seller info
+    const sellerId = prompt.user_id;
+    if (user && user.id === sellerId) {
+      return NextResponse.json(createErrorResponse(
+        ErrorCodes.VALIDATION_ERROR,
+        'Cannot purchase your own prompt'
+      ), { status: 400 });
     }
 
     const siteUrl = process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000";
@@ -84,20 +110,48 @@ export async function POST(req: Request) {
           quantity: 1,
         },
       ],
-      success_url: `${siteUrl}/success?session_id={CHECKOUT_SESSION_ID}`,
-      cancel_url: `${siteUrl}/cancel`,
+      success_url: success_url || `${siteUrl}/success?session_id={CHECKOUT_SESSION_ID}`,
+      cancel_url: cancel_url || `${siteUrl}/cancel`,
       metadata: {
         prompt_id: promptId,
-        user_id: body.user_id ?? "",
+        seller_id: sellerId,
+        user_id: user?.id ?? "",
       },
     });
 
-    return NextResponse.json({ url: session.url });
-  } catch (err: any) {
-    console.error("Stripe checkout error:", err);
-    const message =
-      err?.message ??
-      "Stripe checkout error. Please check STRIPE_SECRET_KEY and your test mode configuration.";
-    return NextResponse.json({ error: message }, { status: 500 });
+    // Return success response
+    return NextResponse.json(createSuccessResponse({
+      url: session.url,
+      sessionId: session.id
+    }, 'Checkout session created successfully'));
+
+  } catch (error: any) {
+    console.error('Stripe checkout error:', error);
+    
+    // Handle Stripe-specific errors
+    if (error.type === 'StripeCardError') {
+      return NextResponse.json(createErrorResponse(
+        ErrorCodes.VALIDATION_ERROR,
+        'Payment method error',
+        error.message
+      ), { status: 400 });
+    }
+    
+    if (error.type === 'StripeRateLimitError') {
+      return NextResponse.json(createErrorResponse(
+        ErrorCodes.VALIDATION_ERROR,
+        'Too many requests - please try again later'
+      ), { status: 429 });
+    }
+    
+    if (error.type?.startsWith('Stripe')) {
+      return NextResponse.json(createErrorResponse(
+        ErrorCodes.EXTERNAL_SERVICE_ERROR,
+        'Payment processor error',
+        error.message
+      ), { status: 502 });
+    }
+
+    return NextResponse.json(createServerErrorResponse(error));
   }
 }

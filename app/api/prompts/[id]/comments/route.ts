@@ -1,108 +1,146 @@
-import type { NextRequest } from 'next/server';
 import { NextResponse } from 'next/server';
-import { createClient } from '@supabase/supabase-js';
-import type { GenericSupabaseClient } from '@/lib/supabase-types';
+import { createSupabaseServerClient, getCurrentUser } from '@/lib/supabase/server';
+import { commentSchema } from '@/lib/validation/schemas';
+import { 
+  createSuccessResponse, 
+  createErrorResponse, 
+  createValidationErrorResponse, 
+  createAuthErrorResponse, 
+  createNotFoundErrorResponse,
+  ErrorCodes 
+} from '@/lib/api/responses';
 
 export const runtime = 'nodejs';
 
-function getSupabaseAdmin(): GenericSupabaseClient | null {
-  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL?.trim();
-  const supabaseServiceKey = process.env.NEXT_PRIVATE_SUPABASE_SERVICE_ROLE_KEY?.trim();
-
-  if (!supabaseUrl || !supabaseServiceKey) {
-    return null;
-  }
-
-  return createClient(supabaseUrl, supabaseServiceKey) as GenericSupabaseClient;
-}
-
-function getToken(req: NextRequest) {
-  const authHeader = req.headers.get('authorization');
-  if (!authHeader) return null;
-  return authHeader.replace('Bearer ', '').trim();
-}
-
-async function getUserId(req: NextRequest, supabaseAdmin: GenericSupabaseClient) {
-  const token = getToken(req);
-  if (!token) return null;
-  const { data, error } = await supabaseAdmin.auth.getUser(token);
-  if (error || !data?.user) return null;
-  return data.user.id;
-}
-
-const sanitize = (value: string) =>
-  value.replace(/</g, '&lt;').replace(/>/g, '&gt;').slice(0, 2000); // trim to practical length
-
 export async function GET(
-  _req: NextRequest,
-  context: { params: Promise<{ id: string }> }
+  _req: Request,
+  { params }: { params: { id: string } }
 ) {
-  const supabaseAdmin = getSupabaseAdmin();
-  if (!supabaseAdmin) {
-    return NextResponse.json(
-      { error: 'Server misconfigured: Supabase URL and service role key are required for comments API.' },
-      { status: 500 },
-    );
-  }
-
-  const { id } = await context.params;
   try {
-    const { data, error } = await supabaseAdmin
+    const promptId = params.id;
+
+    // Create Supabase client
+    const supabase = await createSupabaseServerClient();
+
+    // Check if prompt exists
+    const { data: prompt, error: promptError } = await supabase
+      .from('prompts')
+      .select('id')
+      .eq('id', promptId)
+      .single();
+
+    if (promptError || !prompt) {
+      return NextResponse.json(createNotFoundErrorResponse('Prompt'), { status: 404 });
+    }
+
+    // Get comments for the prompt
+    const { data: comments, error: commentsError } = await supabase
       .from('prompt_comments')
       .select('id, user_id, comment, created_at')
-      .eq('prompt_id', id)
+      .eq('prompt_id', promptId)
       .order('created_at', { ascending: false });
 
-    if (error) throw error;
-    return NextResponse.json({ comments: data ?? [] });
-  } catch (err: any) {
-    return NextResponse.json({ error: err.message ?? 'Failed to fetch comments' }, { status: 500 });
+    if (commentsError) {
+      console.error('Error fetching comments:', commentsError);
+      return NextResponse.json(createErrorResponse(
+        ErrorCodes.DATABASE_ERROR,
+        'Failed to fetch comments'
+      ), { status: 500 });
+    }
+
+    // Return success response
+    return NextResponse.json(createSuccessResponse({
+      comments: comments || []
+    }));
+
+  } catch (error) {
+    console.error('Unexpected error in comments fetch:', error);
+    return NextResponse.json(createErrorResponse(
+      ErrorCodes.INTERNAL_ERROR,
+      'An unexpected error occurred'
+    ), { status: 500 });
   }
 }
 
 export async function POST(
-  req: NextRequest,
-  context: { params: Promise<{ id: string }> }
+  req: Request,
+  { params }: { params: { id: string } }
 ) {
-  const supabaseAdmin = getSupabaseAdmin();
-  if (!supabaseAdmin) {
-    return NextResponse.json(
-      { error: 'Server misconfigured: Supabase URL and service role key are required for comments API.' },
-      { status: 500 },
-    );
-  }
-
-  const { id } = await context.params;
-  const userId = await getUserId(req, supabaseAdmin);
-  if (!userId) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-
-  let body: { comment?: string };
   try {
-    body = await req.json();
-  } catch {
-    return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 });
-  }
+    // Get current user
+    const user = await getCurrentUser();
+    if (!user) {
+      return NextResponse.json(createAuthErrorResponse(), { status: 401 });
+    }
 
-  const comment = sanitize((body.comment ?? '').trim());
-  if (!comment) {
-    return NextResponse.json({ error: 'Comment is required' }, { status: 400 });
-  }
+    const promptId = params.id;
 
-  try {
-    const { data, error } = await supabaseAdmin
+    // Parse and validate request body
+    let body;
+    try {
+      body = await req.json();
+    } catch {
+      return NextResponse.json(createErrorResponse(
+        ErrorCodes.VALIDATION_ERROR,
+        'Invalid JSON in request body'
+      ), { status: 400 });
+    }
+
+    // Validate input using Zod schema
+    const validationResult = commentSchema.safeParse(body);
+    if (!validationResult.success) {
+      return NextResponse.json(
+        createValidationErrorResponse(validationResult.error.issues),
+        { status: 400 }
+      );
+    }
+
+    const { comment: commentText } = validationResult.data;
+
+    // Create Supabase client
+    const supabase = await createSupabaseServerClient();
+
+    // Check if prompt exists
+    const { data: prompt, error: promptError } = await supabase
+      .from('prompts')
+      .select('id')
+      .eq('id', promptId)
+      .single();
+
+    if (promptError || !prompt) {
+      return NextResponse.json(createNotFoundErrorResponse('Prompt'), { status: 404 });
+    }
+
+    // Insert the comment
+    const { data: comment, error: insertError } = await supabase
       .from('prompt_comments')
       .insert({
-        prompt_id: id,
-        user_id: userId,
-        comment,
+        prompt_id: promptId,
+        user_id: user.id,
+        comment: commentText,
       })
       .select('id, user_id, comment, created_at')
       .single();
 
-    if (error) throw error;
+    if (insertError) {
+      console.error('Error inserting comment:', insertError);
+      return NextResponse.json(createErrorResponse(
+        ErrorCodes.DATABASE_ERROR,
+        'Failed to add comment'
+      ), { status: 500 });
+    }
 
-    return NextResponse.json({ comment: data });
-  } catch (err: any) {
-    return NextResponse.json({ error: err.message ?? 'Failed to add comment' }, { status: 500 });
+    // Return success response
+    return NextResponse.json(createSuccessResponse({
+      comment
+    }, 'Comment added successfully'));
+
+  } catch (error) {
+    console.error('Unexpected error in comment submission:', error);
+    return NextResponse.json(createErrorResponse(
+      ErrorCodes.INTERNAL_ERROR,
+      'An unexpected error occurred'
+    ), { status: 500 });
   }
 }
+

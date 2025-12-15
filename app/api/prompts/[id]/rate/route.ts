@@ -1,95 +1,151 @@
-import type { NextRequest } from 'next/server';
 import { NextResponse } from 'next/server';
-import { createClient } from '@supabase/supabase-js';
-import type { GenericSupabaseClient } from '@/lib/supabase-types';
+import { createSupabaseServerClient, getCurrentUser } from '@/lib/supabase/server';
+import { ratePromptSchema } from '@/lib/validation/schemas';
+import { 
+  createSuccessResponse, 
+  createErrorResponse, 
+  createValidationErrorResponse, 
+  createAuthErrorResponse, 
+  createNotFoundErrorResponse,
+  ErrorCodes 
+} from '@/lib/api/responses';
 
 export const runtime = 'nodejs';
 
-function getSupabaseAdmin(): GenericSupabaseClient | null {
-  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL?.trim();
-  const supabaseServiceKey = process.env.NEXT_PRIVATE_SUPABASE_SERVICE_ROLE_KEY?.trim();
-
-  if (!supabaseUrl || !supabaseServiceKey) {
-    return null;
-  }
-
-  return createClient(supabaseUrl, supabaseServiceKey) as GenericSupabaseClient;
-}
-
-function getToken(req: NextRequest) {
-  const authHeader = req.headers.get('authorization');
-  if (!authHeader) return null;
-  return authHeader.replace('Bearer ', '').trim();
-}
-
-async function getUserId(req: NextRequest, supabaseAdmin: GenericSupabaseClient) {
-  const token = getToken(req);
-  if (!token) return null;
-  const { data, error } = await supabaseAdmin.auth.getUser(token);
-  if (error || !data?.user) return null;
-  return data.user.id;
-}
-
 export async function POST(
-  req: NextRequest,
-  context: { params: Promise<{ id: string }> }
+  req: Request,
+  { params }: { params: { id: string } }
 ) {
-  const supabaseAdmin = getSupabaseAdmin();
-  if (!supabaseAdmin) {
-    return NextResponse.json(
-      { error: 'Server misconfigured: Supabase URL and service role key are required for rating API.' },
-      { status: 500 },
-    );
-  }
-
-  const { id } = await context.params;
-  const userId = await getUserId(req, supabaseAdmin);
-  if (!userId) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-
-  let body: { rating?: number; comment?: string };
   try {
-    body = await req.json();
-  } catch {
-    return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 });
-  }
+    // Get current user
+    const user = await getCurrentUser();
+    if (!user) {
+      return NextResponse.json(createAuthErrorResponse(), { status: 401 });
+    }
 
-  const rating = Number(body.rating);
-  if (!Number.isInteger(rating) || rating < 1 || rating > 5) {
-    return NextResponse.json({ error: 'Rating must be an integer 1-5' }, { status: 400 });
-  }
+    // Parse and validate request body
+    let body;
+    try {
+      body = await req.json();
+    } catch {
+      return NextResponse.json(createErrorResponse(
+        ErrorCodes.VALIDATION_ERROR,
+        'Invalid JSON in request body'
+      ), { status: 400 });
+    }
 
-  const comment =
-    typeof body.comment === 'string'
-      ? body.comment.trim().replace(/</g, '&lt;').replace(/>/g, '&gt;').slice(0, 2000)
-      : null;
+    // Validate input using Zod schema
+    const validationResult = ratePromptSchema.safeParse(body);
+    if (!validationResult.success) {
+      return NextResponse.json(
+        createValidationErrorResponse(validationResult.error.issues),
+        { status: 400 }
+      );
+    }
 
-  try {
-    const { error: upsertError } = await supabaseAdmin.from('prompt_ratings').upsert(
-      {
-        prompt_id: id,
-        user_id: userId,
-        rating,
-        comment,
-      },
-      { onConflict: 'prompt_id,user_id' },
-    );
+    const { rating, comment } = validationResult.data;
+    const promptId = params.id;
 
-    if (upsertError) throw upsertError;
+    // Create Supabase client
+    const supabase = await createSupabaseServerClient();
 
-    // recompute average rating
-    const { data: agg, error: aggError } = await supabaseAdmin
-      .from('prompt_ratings')
-      .select('avg(rating)')
-      .eq('prompt_id', id)
+    // Check if prompt exists
+    const { data: prompt, error: promptError } = await supabase
+      .from('prompts')
+      .select('id')
+      .eq('id', promptId)
       .single();
-    if (aggError) throw aggError;
-    const average = Number((agg as any)?.avg) || Number((agg as any)?.['avg']) || 0;
 
-    // best-effort cache update; ignore if column missing
-    await supabaseAdmin.from('prompts').update({ average_rating: average }).eq('id', id);
+    if (promptError || !prompt) {
+      return NextResponse.json(createNotFoundErrorResponse('Prompt'), { status: 404 });
+    }
 
-    return NextResponse.json({ rating, average });
-  } catch (err: any) {
-    return NextResponse.json({ error: err.message ?? 'Failed to submit rating' }, { status: 500 });
+    // Check if user already rated this prompt
+    const { data: existingRating } = await supabase
+      .from('prompt_ratings')
+      .select('id')
+      .eq('prompt_id', promptId)
+      .eq('user_id', user.id)
+      .maybeSingle();
+
+    if (existingRating) {
+      // Update existing rating
+      const { error: updateError } = await supabase
+        .from('prompt_ratings')
+        .update({
+          rating,
+          comment: comment || null,
+        })
+        .eq('prompt_id', promptId)
+        .eq('user_id', user.id);
+
+      if (updateError) {
+        console.error('Error updating rating:', updateError);
+        return NextResponse.json(createErrorResponse(
+          ErrorCodes.DATABASE_ERROR,
+          'Failed to update rating'
+        ), { status: 500 });
+      }
+    } else {
+      // Create new rating
+      const { error: insertError } = await supabase
+        .from('prompt_ratings')
+        .insert({
+          prompt_id: promptId,
+          user_id: user.id,
+          rating,
+          comment: comment || null,
+        });
+
+      if (insertError) {
+        console.error('Error inserting rating:', insertError);
+        return NextResponse.json(createErrorResponse(
+          ErrorCodes.DATABASE_ERROR,
+          'Failed to submit rating'
+        ), { status: 500 });
+      }
+    }
+
+    // Recompute average rating
+    const { data: agg, error: aggError } = await supabase
+      .from('prompt_ratings')
+      .select('rating')
+      .eq('prompt_id', promptId);
+
+    if (aggError) {
+      console.error('Error calculating average rating:', aggError);
+    }
+
+    let average = 0;
+    if (agg && agg.length > 0) {
+      const totalRating = agg.reduce((sum, item) => sum + item.rating, 0);
+      average = Math.round((totalRating / agg.length) * 10) / 10; // Round to 1 decimal place
+    }
+
+    // Update prompt average rating (best effort)
+    try {
+      await supabase
+        .from('prompts')
+        .update({ average_rating: average })
+        .eq('id', promptId);
+    } catch (updateError) {
+      // Ignore if average_rating column doesn't exist
+      console.warn('Could not update prompt average_rating:', updateError);
+    }
+
+    // Return success response
+    return NextResponse.json(createSuccessResponse({
+      rating,
+      average,
+      promptId,
+    }, 'Rating submitted successfully'));
+
+  } catch (error) {
+    console.error('Unexpected error in rating submission:', error);
+    return NextResponse.json(createErrorResponse(
+      ErrorCodes.INTERNAL_ERROR,
+      'An unexpected error occurred'
+    ), { status: 500 });
   }
 }
+

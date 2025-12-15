@@ -4,7 +4,8 @@ import { useMemo, useState, type Dispatch, type SetStateAction } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 
-import { supabase } from '@/lib/supabase';
+
+import { supabase } from '@/lib/supabase/client';
 import { useUser } from '@/lib/useUser';
 
 import type { Prompt, Rating } from './page';

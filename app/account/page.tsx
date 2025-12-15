@@ -3,7 +3,8 @@
 import { useEffect, useState } from 'react';
 
 import LogoutButton from '@/components/LogoutButton';
-import { supabase } from '@/lib/supabase';
+
+import { supabase } from '@/lib/supabase/client';
 
 export default function AccountPage() {
   const [email, setEmail] = useState<string | null>(null);

@@ -1,7 +1,9 @@
+
+
 import { redirect } from 'next/navigation';
 import { createClient } from '@supabase/supabase-js';
 
-import { getUser } from '@/lib/auth';
+import { getCurrentUser } from '@/lib/supabase/server';
 
 type PromptStats = {
   id: string;
@@ -19,8 +21,9 @@ function barWidth(value: number, max: number) {
   return `${Math.min(100, Math.round((value / max) * 100))}%`;
 }
 
+
 export default async function AnalyticsPage() {
-  const user = await getUser();
+  const user = await getCurrentUser();
   if (!user) {
     redirect('/sign-in');
   }
@@ -40,7 +43,8 @@ export default async function AnalyticsPage() {
     throw new Error(error.message);
   }
 
-  const prompts: PromptStats[] = (data ?? []).map((p) => ({
+
+  const prompts: PromptStats[] = (data ?? []).map((p: any) => ({
     id: p.id,
     title: p.title,
     views: Number(p.views ?? 0),

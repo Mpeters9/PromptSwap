@@ -1,7 +1,8 @@
 "use client";
 
 import { FormEvent, useState } from "react";
-import { supabaseBrowserClient } from "@/lib/supabase";
+
+import { supabase } from "@/lib/supabase/client";
 
 type Mode = "sign-in" | "sign-up";
 
@@ -13,7 +14,8 @@ export function AuthForm() {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
-  const supabase = supabaseBrowserClient;
+
+  // supabase client is imported and used directly
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();

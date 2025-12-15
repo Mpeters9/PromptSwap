@@ -1,99 +1,95 @@
-import { cookies } from 'next/headers';
 import { NextResponse } from 'next/server';
-import { createClient } from '@supabase/supabase-js';
+import { createSupabaseServerClient, getCurrentUser } from '@/lib/supabase/server';
+import { createPromptSchema } from '@/lib/validation/schemas';
+import { 
+  createSuccessResponse, 
+  createErrorResponse, 
+  createValidationErrorResponse, 
+  createAuthErrorResponse, 
+  ErrorCodes 
+} from '@/lib/api/responses';
 
 export const runtime = 'nodejs';
 
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL?.trim();
-const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY?.trim();
-const supabaseServiceKey = process.env.NEXT_PRIVATE_SUPABASE_SERVICE_ROLE_KEY?.trim();
-const projectRef = supabaseUrl?.replace(/^https?:\/\//, '').split('.')[0];
-
-type Body = {
-  title?: string;
-  description?: string | null;
-  price?: number | null;
-  category?: string | null;
-  prompt_text?: string;
-  tags?: string[] | null;
-  preview_image?: string | null;
-};
-
-async function extractAccessToken(): Promise<string | null> {
-  if (!projectRef) return null;
-  const store = await cookies();
-  const cookieName = `sb-${projectRef}-auth-token`;
-  const value = store.get(cookieName)?.value ?? store.get("supabase-auth-token")?.value;
-  if (!value) return null;
-
-  try {
-    const parsed = JSON.parse(value);
-    if (Array.isArray(parsed)) return (parsed[0] as string) ?? null;
-    if (parsed?.access_token) return parsed.access_token as string;
-    if (parsed?.currentSession?.access_token) return parsed.currentSession.access_token as string;
-  } catch {
-    return null;
-  }
-  return null;
-}
-
 export async function POST(req: Request) {
-  if (!supabaseUrl || !supabaseAnonKey || !supabaseServiceKey) {
-    return NextResponse.json({ error: 'Supabase not configured' }, { status: 500 });
-  }
-
-  const accessToken = await extractAccessToken();
-  if (!accessToken) {
-    return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
-  }
-
-  let body: Body;
   try {
-    body = await req.json();
-  } catch {
-    return NextResponse.json({ error: 'invalid_body' }, { status: 400 });
+    // Get current user
+    const user = await getCurrentUser();
+    if (!user) {
+      return NextResponse.json(createAuthErrorResponse(), { status: 401 });
+    }
+
+    // Parse and validate request body
+    let body;
+    try {
+      body = await req.json();
+    } catch {
+      return NextResponse.json(createErrorResponse(
+        ErrorCodes.VALIDATION_ERROR,
+        'Invalid JSON in request body'
+      ), { status: 400 });
+    }
+
+
+    // Validate input using Zod schema
+    const validationResult = createPromptSchema.safeParse(body);
+    if (!validationResult.success) {
+      return NextResponse.json(
+        createValidationErrorResponse(validationResult.error.issues),
+        { status: 400 }
+      );
+    }
+
+    const validatedData = validationResult.data;
+
+    // Create Supabase client
+    const supabase = await createSupabaseServerClient();
+
+    // Insert the prompt
+    const { data, error: insertError } = await supabase
+      .from('prompts')
+      .insert({
+        user_id: user.id,
+        title: validatedData.title,
+        description: validatedData.description,
+        category: validatedData.category,
+        price: validatedData.price,
+        prompt_text: validatedData.prompt_text,
+        tags: validatedData.tags,
+        is_public: validatedData.is_public,
+        version: validatedData.version,
+      })
+      .select('id')
+      .single();
+
+    if (insertError) {
+      console.error('Error creating prompt:', insertError);
+      return NextResponse.json(createErrorResponse(
+        ErrorCodes.DATABASE_ERROR,
+        'Failed to create prompt',
+        insertError.message
+      ), { status: 500 });
+    }
+
+    if (!data) {
+      return NextResponse.json(createErrorResponse(
+        ErrorCodes.INTERNAL_ERROR,
+        'No data returned from prompt creation'
+      ), { status: 500 });
+    }
+
+    // Return success response
+    return NextResponse.json(createSuccessResponse({
+      promptId: data.id,
+      redirect: `/prompt/${data.id}`
+    }, 'Prompt created successfully'));
+
+  } catch (error) {
+    console.error('Unexpected error in prompt creation:', error);
+    return NextResponse.json(createErrorResponse(
+      ErrorCodes.INTERNAL_ERROR,
+      'An unexpected error occurred'
+    ), { status: 500 });
   }
-
-  const supabaseAuth = createClient(supabaseUrl, supabaseAnonKey, {
-    global: { headers: { Authorization: `Bearer ${accessToken}` } },
-  });
-  const supabaseAdmin = createClient(supabaseUrl, supabaseServiceKey);
-
-  const { data: userData, error: userError } = await supabaseAuth.auth.getUser(accessToken);
-  if (userError || !userData?.user) {
-    return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
-  }
-
-  const title = (body.title ?? '').trim();
-  const promptText = (body.prompt_text ?? '').trim();
-
-  if (!title || !promptText) {
-    return NextResponse.json({ error: 'missing_fields' }, { status: 400 });
-  }
-
-  const insertPayload = {
-    user_id: userData.user.id,
-    title,
-    description: body.description ?? null,
-    category: body.category ?? null,
-    price: body.price ?? null,
-    prompt_text: promptText,
-    tags: Array.isArray(body.tags) ? body.tags : null,
-    preview_image: body.preview_image ?? null,
-  };
-
-  const { data, error: insertError } = await supabaseAdmin
-    .from('prompts')
-    .insert(insertPayload)
-    .select('id')
-    .single();
-
-  if (insertError || !data) {
-    return NextResponse.json(
-      { error: insertError?.message ?? 'failed_to_create' },
-      { status: 500 },
-    );
-  }
-
-  return NextResponse.json({ redirect: `/prompt/${data.id}` });
 }
+

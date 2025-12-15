@@ -1,4 +1,5 @@
-import { supabase } from '@/lib/supabase';
+
+import { supabase } from '@/lib/supabase/client';
 
 const BUCKET = 'prompt-images';
 const MAX_FILE_SIZE_BYTES = 5 * 1024 * 1024; // 5 MB limit; adjust to your project's needs.

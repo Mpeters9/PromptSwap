@@ -9,7 +9,8 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
-import { supabase } from '@/lib/supabase';
+
+import { supabase } from '@/lib/supabase/client';
 import { useUser } from '@/lib/useUser';
 
 type FormState = {

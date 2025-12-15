@@ -3,7 +3,8 @@
 import { useEffect, useState, type FormEvent } from 'react';
 import { useRouter } from 'next/navigation';
 
-import { supabase } from '@/lib/supabase-client';
+
+import { supabase } from '@/lib/supabase/client';
 
 export default function DashboardSettingsPage() {
   const router = useRouter();

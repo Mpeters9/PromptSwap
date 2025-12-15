@@ -3,7 +3,8 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 
-import { supabase } from '@/lib/supabase';
+
+import { supabase } from '@/lib/supabase/client';
 import { useUser } from '@/lib/useUser';
 
 type Prompt = {

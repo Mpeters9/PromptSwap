@@ -1,29 +1,17 @@
 import { NextResponse } from 'next/server';
-import { cookies } from 'next/headers';
-import { createClient } from '@supabase/supabase-js';
-import { logError } from '@/lib/logger';
+import { createSupabaseServerClient, getCurrentUser } from '@/lib/supabase/server';
+import { purchaseSchema } from '@/lib/validation/schemas';
+import { 
+  createSuccessResponse, 
+  createErrorResponse, 
+  createValidationErrorResponse, 
+  createAuthErrorResponse, 
+  createNotFoundErrorResponse,
+  ErrorCodes 
+} from '@/lib/api/responses';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
-
-function getSupabaseAdmin() {
-  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL?.trim();
-  const supabaseServiceKey = process.env.NEXT_PRIVATE_SUPABASE_SERVICE_ROLE_KEY?.trim();
-
-  if (!supabaseUrl || !supabaseServiceKey) {
-    return null;
-  }
-
-  return createClient(supabaseUrl, supabaseServiceKey);
-}
-
-type PurchaseBody = {
-  promptId?: string;
-};
-
-type ProfileRow = {
-  credits: number | null;
-};
 
 const rateLimitWindowMs = 60_000;
 const rateLimitMax = 10;
@@ -42,50 +30,48 @@ function rateLimit(key: string) {
 }
 
 export async function POST(req: Request) {
-  const supabaseAdmin = getSupabaseAdmin();
-  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL?.trim();
-  const supabaseServiceKey = process.env.NEXT_PRIVATE_SUPABASE_SERVICE_ROLE_KEY?.trim();
-
-  if (!supabaseAdmin || !supabaseUrl || !supabaseServiceKey) {
-    return NextResponse.json(
-      { error: 'Server misconfigured: Supabase URL and service role key are required for purchases.' },
-      { status: 500 }
-    );
-  }
-
-  const cookieStore = await cookies();
-  const accessToken = cookieStore.get("sb-access-token")?.value ?? "";
-  const supabase = createClient(supabaseUrl, supabaseServiceKey, {
-    global: {
-      headers: accessToken ? { Authorization: `Bearer ${accessToken}` } : {},
-    },
-  });
-
   try {
+    // Rate limiting
     const ip = (req.headers.get('x-forwarded-for') || '').split(',')[0] || 'unknown';
     if (rateLimit(ip)) {
-      return NextResponse.json({ error: 'rate_limited' }, { status: 429 });
+      return NextResponse.json(createErrorResponse(
+        ErrorCodes.VALIDATION_ERROR,
+        'Rate limit exceeded'
+      ), { status: 429 });
     }
 
-    let body: PurchaseBody;
+    // Get current user
+    const user = await getCurrentUser();
+    if (!user) {
+      return NextResponse.json(createAuthErrorResponse(), { status: 401 });
+    }
+
+    // Parse and validate request body
+    let body;
     try {
       body = await req.json();
     } catch {
-      return NextResponse.json({ error: 'invalid_body' }, { status: 400 });
+      return NextResponse.json(createErrorResponse(
+        ErrorCodes.VALIDATION_ERROR,
+        'Invalid JSON in request body'
+      ), { status: 400 });
     }
 
-    const promptId = body.promptId?.trim();
-    if (!promptId) {
-      return NextResponse.json({ error: 'promptId_required' }, { status: 400 });
+    // Validate input using Zod schema
+    const validationResult = purchaseSchema.safeParse(body);
+    if (!validationResult.success) {
+      return NextResponse.json(
+        createValidationErrorResponse(validationResult.error.issues),
+        { status: 400 }
+      );
     }
 
-    const { data: sessionData, error: sessionError } = await supabase.auth.getSession();
-    if (sessionError || !sessionData.session?.user) {
-      return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
-    }
+    const { prompt_id: promptId } = validationResult.data;
 
-    const userId = sessionData.session.user.id;
+    // Create Supabase client
+    const supabase = await createSupabaseServerClient();
 
+    // Get prompt details
     const { data: prompt, error: promptError } = await supabase
       .from('prompts')
       .select('id, title, price, user_id, prompt_text')
@@ -93,77 +79,98 @@ export async function POST(req: Request) {
       .single();
 
     if (promptError || !prompt) {
-      return NextResponse.json({ error: 'prompt_not_found' }, { status: 404 });
+      return NextResponse.json(createNotFoundErrorResponse('Prompt'), { status: 404 });
     }
 
-    if (prompt.user_id === userId) {
-      return NextResponse.json({ error: 'cannot_buy_own_prompt' }, { status: 400 });
+    if (prompt.user_id === user.id) {
+      return NextResponse.json(createErrorResponse(
+        ErrorCodes.VALIDATION_ERROR,
+        'Cannot purchase your own prompt'
+      ), { status: 400 });
     }
 
-    const { data: existingPurchase, error: purchaseCheckError } = await supabase
+    // Check if already purchased
+    const { data: existingPurchase } = await supabase
       .from('purchases')
       .select('id')
-      .eq('buyer_id', userId)
+      .eq('buyer_id', user.id)
       .eq('prompt_id', prompt.id)
       .maybeSingle();
 
-    if (purchaseCheckError) {
-      return NextResponse.json({ error: 'purchase_check_failed' }, { status: 500 });
-    }
-
     if (existingPurchase) {
-      return NextResponse.json({ error: 'already_owned' }, { status: 400 });
+      return NextResponse.json(createErrorResponse(
+        ErrorCodes.ALREADY_EXISTS,
+        'You already own this prompt'
+      ), { status: 400 });
     }
 
     const price = Math.round(Number(prompt.price ?? 0));
 
-    const { data: buyerProfile, error: buyerProfileError } = await supabaseAdmin
+    if (!Number.isFinite(price) || price < 0) {
+      return NextResponse.json(createErrorResponse(
+        ErrorCodes.VALIDATION_ERROR,
+        'Invalid prompt price'
+      ), { status: 400 });
+    }
+
+    // Get buyer profile
+    const { data: buyerProfile, error: buyerProfileError } = await supabase
       .from('profiles')
       .select('credits')
-      .eq('id', userId)
+      .eq('id', user.id)
       .single();
 
-    if (buyerProfileError || buyerProfile === null) {
-      return NextResponse.json({ error: 'buyer_profile_missing' }, { status: 500 });
+    if (buyerProfileError || !buyerProfile) {
+      return NextResponse.json(createErrorResponse(
+        ErrorCodes.DATABASE_ERROR,
+        'Failed to load buyer profile'
+      ), { status: 500 });
     }
 
-    const buyerCredits = Number(buyerProfile?.credits ?? 0);
-
-    if (!Number.isFinite(price) || price < 0) {
-      return NextResponse.json({ error: 'invalid_price' }, { status: 400 });
-    }
+    const buyerCredits = Number(buyerProfile.credits ?? 0);
 
     if (buyerCredits < price) {
-      return NextResponse.json({ error: 'insufficient_credits' }, { status: 400 });
+      return NextResponse.json(createErrorResponse(
+        ErrorCodes.INSUFFICIENT_FUNDS,
+        'Insufficient credits to purchase this prompt'
+      ), { status: 400 });
     }
 
-    const { data: sellerProfile, error: sellerProfileError } = await supabaseAdmin
+    // Get seller profile
+    const { data: sellerProfile, error: sellerProfileError } = await supabase
       .from('profiles')
       .select('credits')
       .eq('id', prompt.user_id)
       .single();
 
-    if (sellerProfileError || sellerProfile === null) {
-      return NextResponse.json({ error: 'seller_profile_missing' }, { status: 500 });
+    if (sellerProfileError || !sellerProfile) {
+      return NextResponse.json(createErrorResponse(
+        ErrorCodes.DATABASE_ERROR,
+        'Failed to load seller profile'
+      ), { status: 500 });
     }
 
-    const sellerCredits = Number(sellerProfile?.credits ?? 0);
+    const sellerCredits = Number(sellerProfile.credits ?? 0);
 
-    // Attempt to keep updates consistent with manual rollbacks if a later step fails.
-    const { data: buyerUpdate, error: buyerUpdateError } = await supabaseAdmin
+    // Update buyer credits with optimistic locking
+    const { data: buyerUpdate, error: buyerUpdateError } = await supabase
       .from('profiles')
       .update({ credits: buyerCredits - price })
-      .eq('id', userId)
+      .eq('id', user.id)
       .eq('credits', buyerCredits)
       .select('credits')
       .single();
 
     if (buyerUpdateError || !buyerUpdate) {
       const insufficient = buyerUpdateError?.code === '23514' || buyerUpdateError?.code === '23505';
-      return NextResponse.json({ error: insufficient ? 'insufficient_credits' : 'purchase_failed' }, { status: 400 });
+      return NextResponse.json(createErrorResponse(
+        insufficient ? ErrorCodes.INSUFFICIENT_FUNDS : ErrorCodes.DATABASE_ERROR,
+        insufficient ? 'Insufficient credits' : 'Failed to update buyer credits'
+      ), { status: 400 });
     }
 
-    const { data: sellerUpdate, error: sellerUpdateError } = await supabaseAdmin
+    // Update seller credits
+    const { data: sellerUpdate, error: sellerUpdateError } = await supabase
       .from('profiles')
       .update({ credits: sellerCredits + price })
       .eq('id', prompt.user_id)
@@ -172,35 +179,62 @@ export async function POST(req: Request) {
       .single();
 
     if (sellerUpdateError || !sellerUpdate) {
-      await supabaseAdmin.from('profiles').update({ credits: buyerCredits }).eq('id', userId);
-      return NextResponse.json({ error: 'purchase_failed' }, { status: 500 });
+      // Rollback buyer update
+      await supabase
+        .from('profiles')
+        .update({ credits: buyerCredits })
+        .eq('id', user.id);
+      
+      return NextResponse.json(createErrorResponse(
+        ErrorCodes.DATABASE_ERROR,
+        'Failed to update seller credits'
+      ), { status: 500 });
     }
 
-    const { error: insertError } = await supabaseAdmin
+    // Create purchase record
+    const { error: insertError } = await supabase
       .from('purchases')
       .insert({
-        buyer_id: userId,
+        buyer_id: user.id,
         seller_id: prompt.user_id,
         prompt_id: prompt.id,
         price,
-      })
-      .select('id')
-      .single();
+      });
 
     if (insertError) {
-      await supabaseAdmin.from('profiles').update({ credits: buyerCredits }).eq('id', userId);
-      await supabaseAdmin.from('profiles').update({ credits: sellerCredits }).eq('id', prompt.user_id);
+      // Rollback both updates
+      await supabase.from('profiles').update({ credits: buyerCredits }).eq('id', user.id);
+      await supabase.from('profiles').update({ credits: sellerCredits }).eq('id', prompt.user_id);
 
       if (insertError.code === '23505') {
-        return NextResponse.json({ error: 'already_owned' }, { status: 400 });
+        return NextResponse.json(createErrorResponse(
+          ErrorCodes.ALREADY_EXISTS,
+          'Purchase already exists'
+        ), { status: 400 });
       }
 
-      return NextResponse.json({ error: 'purchase_failed' }, { status: 500 });
+      return NextResponse.json(createErrorResponse(
+        ErrorCodes.DATABASE_ERROR,
+        'Failed to create purchase record'
+      ), { status: 500 });
     }
 
-    return NextResponse.json({ success: true, content: prompt.prompt_text });
-  } catch (err: any) {
-    await logError(err, { scope: 'purchase_api' });
-    return NextResponse.json({ error: 'purchase_failed' }, { status: 500 });
+    // Return success response with prompt content
+    return NextResponse.json(createSuccessResponse({
+      content: prompt.prompt_text,
+      purchase: {
+        promptId: prompt.id,
+        title: prompt.title,
+        price: price,
+      }
+    }, 'Prompt purchased successfully'));
+
+  } catch (error) {
+    console.error('Unexpected error in purchase:', error);
+    return NextResponse.json(createErrorResponse(
+      ErrorCodes.INTERNAL_ERROR,
+      'An unexpected error occurred'
+    ), { status: 500 });
   }
 }
+

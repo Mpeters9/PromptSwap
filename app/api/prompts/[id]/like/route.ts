@@ -1,34 +1,63 @@
+
 import type { NextRequest } from 'next/server';
 import { NextResponse } from 'next/server';
-
-import { getUser } from '@/lib/auth';
-import { prisma } from '@/lib/prisma';
+import { createSupabaseServerClient } from '@/lib/supabase/server';
+import { createSuccessResponse, createErrorResponse } from '@/lib/api/responses';
 
 export async function POST(
-  _req: NextRequest,
+  req: NextRequest,
   context: { params: Promise<{ id: string }> }
 ) {
-  const user = await getUser();
-  if (!user) {
-    return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
-  }
-
-  const { id } = await context.params;
-  const promptId = Number(id);
-  if (!Number.isInteger(promptId)) {
-    return NextResponse.json({ error: 'invalid_prompt' }, { status: 400 });
-  }
-
   try {
-    const updated = await prisma.prompt.update({
-      where: { id: promptId },
-      data: { likes: { increment: 1 } },
-      select: { likes: true },
-    });
+    // Create server client for authentication
 
-    return NextResponse.json({ likes: updated.likes });
+    const supabase = await createSupabaseServerClient();
+    
+    // Get authenticated user
+    const {
+      data: { user },
+      error: authError,
+    } = await supabase.auth.getUser();
+    
+    if (authError || !user) {
+      return NextResponse.json(
+        createErrorResponse('UNAUTHORIZED', 'Authentication required'),
+        { status: 401 }
+      );
+    }
+
+    const { id } = await context.params;
+    const promptId = Number(id);
+    
+
+    // Validate prompt ID
+    if (!Number.isInteger(promptId) || promptId <= 0) {
+      return NextResponse.json(
+        createErrorResponse('INVALID_INPUT', 'Invalid prompt ID'),
+        { status: 400 }
+      );
+    }
+
+    // Update like count
+    const { data, error } = await supabase
+      .rpc('increment_prompt_likes', { prompt_id: promptId });
+
+    if (error) {
+      console.error('Like update failed', error);
+      return NextResponse.json(
+        createErrorResponse('DATABASE_ERROR', 'Failed to update like count'),
+        { status: 500 }
+      );
+    }
+
+    return NextResponse.json(
+      createSuccessResponse({ likes: data, promptId })
+    );
   } catch (err: any) {
-    console.error('Like update failed', err);
-    return NextResponse.json({ error: 'failed_to_like' }, { status: 500 });
+    console.error('Like route error', err);
+    return NextResponse.json(
+      createErrorResponse('INTERNAL_ERROR', 'An unexpected error occurred'),
+      { status: 500 }
+    );
   }
 }

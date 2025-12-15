@@ -1,413 +1,522 @@
-import { NextResponse } from 'next/server';
-import Stripe from 'stripe';
-import { createClient } from '@supabase/supabase-js';
-import { logError } from '@/lib/logger';
-import { sendCreatorSaleEmail } from '@/lib/email';
+import { NextRequest, NextResponse } from 'next/server';
+import { createSupabaseServerClient } from '@/lib/supabase/server';
+import { StripeWebhookHandler, PurchaseCreationData, PayoutCreationData } from '@/lib/stripe/webhook-handler';
+
+import { AppError, isOperationalError, ErrorCategory } from '@/lib/errors';
+import { logger } from '@/lib/logging';
+import { BusinessEventLogger } from '@/lib/middleware/api-handler';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 export const preferredRegion = 'iad1';
 
-const stripeSecret = process.env.STRIPE_SECRET_KEY;
-const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-const supabaseServiceKey =
-  process.env.NEXT_PRIVATE_SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY;
+// Initialize webhook handler
+const webhookHandler = new StripeWebhookHandler();
 
-if (!stripeSecret) throw new Error('STRIPE_SECRET_KEY is required');
-if (!webhookSecret) throw new Error('STRIPE_WEBHOOK_SECRET is required');
-if (!supabaseUrl || !supabaseServiceKey) throw new Error('Supabase service credentials are required');
-
-const stripe = new Stripe(stripeSecret, { apiVersion: '2024-04-10' });
-const supabaseAdmin = createClient(supabaseUrl, supabaseServiceKey);
-
-type PromptRow = {
-  id: string;
-  user_id: string | null;
-  price: number | null;
-  title?: string | null;
-  prompt_text?: string | null;
-};
-
-type ProfileRow = {
-  id?: string;
-  credits?: number | null;
-  stripe_account_id?: string | null;
-  connected_account_id?: string | null;
-};
-
-const centsToDollars = (value: number | null | undefined) =>
-  value === null || value === undefined ? null : Number((value / 100).toFixed(2));
-
-const readMetadata = (metadata: Stripe.Metadata | null | undefined, keys: string[]) => {
-  if (!metadata) return null;
-  for (const key of keys) {
-    const value = metadata[key];
-    if (value) return value;
-  }
-  return null;
-};
-
-async function eventAlreadyProcessed(eventId: string) {
-  const { data, error } = await supabaseAdmin
-    .from('stripe_events')
-    .select('event_id')
-    .eq('event_id', eventId)
-    .maybeSingle();
-
-  if (error) {
-    throw new Error(error.message || 'Failed to check stripe_events');
-  }
-
-  return Boolean(data);
-}
-
-async function markEventProcessed(event: Stripe.Event) {
-  const payload = {
-    event_id: event.id,
-    type: event.type,
-    created_at: event.created ? new Date(event.created * 1000).toISOString() : new Date().toISOString(),
-  };
-
-  const { error } = await supabaseAdmin.from('stripe_events').insert(payload);
-  if (error && error.code !== '23505') {
-    console.error('Failed to record stripe event', error);
-  }
-}
-
-async function fetchPrompt(promptId: string) {
-  const { data, error } = await supabaseAdmin
-    .from('prompts')
-    .select('id, user_id, price, prompt_text, title')
-    .eq('id', promptId)
-    .maybeSingle();
-
-  if (error) {
-    throw new Error(error.message || 'Failed to load prompt');
-  }
-
-  return data ?? null;
-}
-
-type UserContact = {
-  email: string | null;
-  name: string | null;
-};
-
-async function fetchUserContact(userId: string | null | undefined): Promise<UserContact | null> {
-  if (!userId) return null;
-
+/**
+ * Handle checkout.session.completed events
+ */
+async function handleCheckoutCompleted(
+  supabase: any, 
+  session: any,
+  requestId: string
+): Promise<void> {
   try {
-    const { data, error } = await supabaseAdmin.auth.admin.getUserById(userId);
+    logger.info('Processing checkout.session.completed', {
+      requestId,
+      sessionId: session.id,
+      amount: session.amount_total,
+      currency: session.currency,
+    }, 'CHECKOUT_COMPLETED_START');
 
-    if (error || !data?.user) {
-      console.error('Failed to load user for email', error || 'not found');
-      return null;
+    // Validate metadata
+    const { promptId, buyerId, sellerId } = StripeWebhookHandler.validatePurchaseMetadata(session);
+
+    // Fetch prompt to get seller and price info
+    const { data: prompt, error: promptError } = await supabase
+      .from('prompts')
+      .select('id, user_id, price, title')
+      .eq('id', promptId)
+      .single();
+
+
+    if (promptError) {
+      throw new AppError(ErrorCategory.RESOURCE, 'PROMPT_NOT_FOUND', `Prompt ${promptId} not found`, 404, {
+        details: promptError.message
+      });
     }
 
-    const user = data.user;
-    const metadata = (user.user_metadata ?? {}) as Record<string, unknown>;
-    const name =
-      typeof metadata.full_name === 'string'
-        ? metadata.full_name
-        : typeof metadata.name === 'string'
-        ? metadata.name
-        : typeof metadata.fullName === 'string'
-        ? metadata.fullName
-        : null;
+    // Use metadata seller ID or prompt
+    const finalSellerId = sellerId || prompt.user_id;
+    if (!finalSellerId) {
+      throw new AppError(ErrorCategory.RESOURCE, 'SELLER_NOT_FOUND', 'No seller found for prompt', 404, {
+        promptId,
+        sellerId,
+        promptUserId: prompt.user_id
+      });
+    }
 
-    return {
-      email: user.email ?? null,
-      name,
+    // Convert amount from cents to dollars
+    const amount = StripeWebhookHandler.centsToDollars(session.amount_total ?? session.amount_subtotal ?? null);
+    const price = amount ?? (prompt.price !== null ? Number(prompt.price) : null);
+
+    if (!price) {
+      throw new AppError(ErrorCategory.VALIDATION, 'INVALID_PRICE', 'No valid price found for purchase', 400, {
+        sessionAmount: session.amount_total,
+        promptPrice: prompt.price
+      });
+    }
+
+    // Create purchase with idempotency
+    const purchaseData: PurchaseCreationData = {
+      buyerId,
+      sellerId: finalSellerId,
+      promptId: prompt.id,
+      stripeSessionId: session.id,
+      amount: price,
+      currency: session.currency || 'usd',
     };
-  } catch (err) {
-    console.error('Error fetching user contact', err);
-    return null;
+
+    const { created, purchaseId } = await webhookHandler.createPurchase(supabase, purchaseData);
+
+    if (created) {
+      // Log business event
+      await BusinessEventLogger.logPurchaseEvent('created', {
+        promptId: prompt.id,
+        userId: buyerId,
+        amount: price,
+        stripeSessionId: session.id,
+      });
+
+      // Update seller credits
+      await updateSellerCredits(supabase, finalSellerId, price, requestId);
+
+      logger.info('Purchase created and credits updated', {
+        requestId,
+        purchaseId,
+        buyerId,
+        sellerId: finalSellerId,
+        promptId,
+        amount: price,
+      }, 'PURCHASE_COMPLETED');
+    } else {
+      logger.info('Purchase already existed, skipping credit update', {
+        requestId,
+        purchaseId,
+        buyerId,
+        promptId,
+      }, 'PURCHASE_ALREADY_EXISTS');
+    }
+
+  } catch (error) {
+    logger.error('Failed to process checkout completion', {
+      requestId,
+      sessionId: session.id,
+    }, error as Error, 'CHECKOUT_PROCESSING_FAILED');
+    
+    throw error;
   }
 }
 
-async function ensurePurchase({
-  buyerId,
-  sellerId,
-  promptId,
-  price,
-}: {
-  buyerId: string;
-  sellerId: string;
-  promptId: string;
-  price: number | null;
-}) {
-  const { data: existing, error: lookupError } = await supabaseAdmin
-    .from('purchases')
-    .select('id')
-    .eq('buyer_id', buyerId)
-    .eq('prompt_id', promptId)
-    .maybeSingle();
+/**
+ * Handle payment_intent.succeeded events
+ */
+async function handlePaymentIntentSucceeded(
+  supabase: any,
+  intent: any,
+  requestId: string
+): Promise<void> {
+  try {
+    logger.info('Processing payment_intent.succeeded', {
+      requestId,
+      paymentIntentId: intent.id,
+      amount: intent.amount_received,
+    }, 'PAYMENT_INTENT_SUCCEEDED_START');
 
-  if (lookupError) throw new Error(lookupError.message || 'Failed to check purchases');
+    const promptId = StripeWebhookHandler.extractMetadata(intent.metadata, ['prompt_id', 'promptId']);
+    const buyerId = StripeWebhookHandler.extractMetadata(intent.metadata, ['user_id', 'buyer_id', 'buyerId', 'userId']);
 
-  const numericPrice = price !== null && price !== undefined ? Number(price) : null;
-  const payload: Record<string, unknown> = {
-    buyer_id: buyerId,
-    seller_id: sellerId,
-    prompt_id: promptId,
-  };
+    if (!promptId || !buyerId) {
+      logger.warn('Missing required metadata on payment_intent.succeeded', {
+        requestId,
+        paymentIntentId: intent.id,
+        promptId,
+        buyerId,
+      }, 'PAYMENT_METADATA_MISSING');
+      return;
+    }
 
-  if (Number.isFinite(numericPrice)) {
-    payload.price = Number(numericPrice);
+    // Fetch prompt
+    const { data: prompt, error: promptError } = await supabase
+      .from('prompts')
+      .select('id, user_id, price')
+      .eq('id', promptId)
+      .single();
+
+
+    if (promptError) {
+      throw new AppError('PROMPT_NOT_FOUND', `Prompt ${promptId} not found`, 404, {
+        details: promptError.message
+      });
+    }
+
+    const finalSellerId = prompt.user_id;
+    const amount = StripeWebhookHandler.centsToDollars(intent.amount_received ?? intent.amount ?? null);
+    const price = amount ?? (prompt.price !== null ? Number(prompt.price) : null);
+
+    if (!price) {
+      throw new AppError('INVALID_PRICE', 'No valid price found for payment intent', 400, {
+        intentAmount: intent.amount_received,
+        promptPrice: prompt.price
+      });
+    }
+
+    // Create purchase
+    const purchaseData: PurchaseCreationData = {
+      buyerId,
+      sellerId: finalSellerId,
+      promptId: prompt.id,
+      stripeSessionId: intent.id, // Use payment intent ID as session ID
+      amount: price,
+      currency: intent.currency || 'usd',
+    };
+
+    const { created } = await webhookHandler.createPurchase(supabase, purchaseData);
+
+    if (created) {
+      await updateSellerCredits(supabase, finalSellerId, price, requestId);
+
+      logger.info('Payment intent purchase processed successfully', {
+        requestId,
+        buyerId,
+        sellerId: finalSellerId,
+        promptId,
+        amount: price,
+      }, 'PAYMENT_PURCHASE_COMPLETED');
+    }
+
+  } catch (error) {
+    logger.error('Failed to process payment intent success', {
+      requestId,
+      paymentIntentId: intent.id,
+    }, error as Error, 'PAYMENT_INTENT_PROCESSING_FAILED');
+    
+    throw error;
   }
-
-  if (existing?.id) {
-    const { error: updateError } = await supabaseAdmin.from('purchases').update(payload).eq('id', existing.id);
-    if (updateError) throw new Error(updateError.message || 'Failed to update purchase');
-    return false;
-  }
-
-  const { error: insertError } = await supabaseAdmin.from('purchases').insert(payload);
-  if (insertError) {
-    if (insertError.code === '23505') return false;
-    throw new Error(insertError.message || 'Failed to insert purchase');
-  }
-
-  return true;
 }
 
-async function creditSeller(sellerId: string | null, amount: number | null) {
-  if (!sellerId) return;
-  const delta = amount !== null && amount !== undefined ? Number(amount) : null;
-  if (!Number.isFinite(delta) || (delta ?? 0) <= 0) return;
+/**
+ * Handle payment_intent.payment_failed events
+ */
+async function handlePaymentIntentFailed(
+  supabase: any,
+  intent: any,
+  requestId: string
+): Promise<void> {
+  try {
+    const promptId = StripeWebhookHandler.extractMetadata(intent.metadata, ['prompt_id', 'promptId']);
+    const buyerId = StripeWebhookHandler.extractMetadata(intent.metadata, ['user_id', 'buyer_id', 'buyerId', 'userId']);
 
-  const { data: profile, error: profileError } = await supabaseAdmin
-    .from('profiles')
-    .select('credits')
-    .eq('id', sellerId)
-    .maybeSingle();
-
-  if (profileError) {
-    console.error('Failed to load seller profile', profileError);
-    return;
-  }
-
-  const nextCredits = Number(profile?.credits ?? 0) + Number(delta);
-  const { error: updateError } = await supabaseAdmin
-    .from('profiles')
-    .update({ credits: nextCredits })
-    .eq('id', sellerId);
-
-  if (updateError) {
-    console.error('Failed to update seller credits', updateError);
-  }
-}
-
-async function findSellerIdByAccount(accountId: string | null) {
-  if (!accountId) return null;
-
-  const { data, error } = await supabaseAdmin
-    .from('profiles')
-    .select('id')
-    .or(`stripe_account_id.eq.${accountId},connected_account_id.eq.${accountId}`)
-    .maybeSingle();
-
-  if (error) {
-    console.error('Failed to map account to seller', error);
-    return null;
-  }
-
-  return data?.id ?? null;
-}
-
-async function handleCheckoutCompleted(session: Stripe.Checkout.Session) {
-  const promptId =
-    readMetadata(session.metadata, ['prompt_id', 'promptId']) ??
-    (session.metadata?.prompt as string | undefined) ??
-    null;
-  const buyerId = readMetadata(session.metadata, ['user_id', 'buyer_id', 'buyerId', 'userId']);
-  if (!promptId || !buyerId) {
-    console.warn('Missing required metadata on checkout.session.completed', {
+    logger.error('Payment intent failed', {
+      requestId,
+      paymentIntentId: intent.id,
       promptId,
       buyerId,
-      sessionId: session.id,
-    });
-    return;
-  }
+      failureCode: intent.last_payment_error?.code,
+      failureMessage: intent.last_payment_error?.message,
+    }, new Error(`Payment failed: ${intent.last_payment_error?.message || 'Unknown error'}`), 'PAYMENT_INTENT_FAILED');
 
-  const prompt = await fetchPrompt(promptId);
-  if (!prompt) {
-    throw new Error(`Prompt ${promptId} not found`);
-  }
-
-  const sellerId =
-    readMetadata(session.metadata, ['seller_id', 'sellerId']) ?? prompt.user_id ?? undefined;
-  const amount = centsToDollars(session.amount_total ?? session.amount_subtotal ?? null);
-  const price = amount ?? (prompt.price !== null ? Number(prompt.price) : null);
-
-  const created = await ensurePurchase({
-    buyerId,
-    sellerId: sellerId || prompt.user_id || buyerId,
-    promptId: prompt.id,
-    price,
-  });
-
-  if (created) {
-    await creditSeller(sellerId ?? prompt.user_id, price);
-  }
-
-  try {
-    const sellerForEmailId = sellerId ?? prompt.user_id;
-    if (sellerForEmailId) {
-      const [sellerContact, buyerContact] = await Promise.all([
-        fetchUserContact(sellerForEmailId),
-        buyerId ? fetchUserContact(buyerId) : Promise.resolve(null),
-      ]);
-
-      if (sellerContact?.email) {
-        const amountForEmail =
-          typeof price === 'number' && Number.isFinite(price) ? price : 0;
-        await sendCreatorSaleEmail({
-          to: sellerContact.email,
-          creatorName: sellerContact.name,
-          promptTitle: prompt.title || 'Prompt',
-          amount: amountForEmail,
-          buyerEmail: buyerContact?.email ?? null,
-        });
-      }
+    // Log business event for failed purchase
+    if (promptId && buyerId) {
+      await BusinessEventLogger.logPurchaseEvent('failed', {
+        promptId,
+        userId: buyerId,
+        amount: 0, // No amount for failed payments
+        error: intent.last_payment_error?.message || 'Unknown payment failure',
+      });
     }
-  } catch (err) {
-    console.error('Error sending creator sale email:', err);
+
+  } catch (error) {
+    logger.error('Failed to process payment intent failure', {
+      requestId,
+      paymentIntentId: intent.id,
+    }, error as Error, 'PAYMENT_FAILURE_PROCESSING_FAILED');
+    
+    // Don't throw - we want to acknowledge receipt even if logging fails
   }
 }
 
-async function handlePaymentIntentSucceeded(intent: Stripe.PaymentIntent) {
-  const promptId =
-    readMetadata(intent.metadata, ['prompt_id', 'promptId']) ??
-    (intent.metadata?.prompt as string | undefined) ??
-    null;
-  const buyerId = readMetadata(intent.metadata, ['user_id', 'buyer_id', 'buyerId', 'userId']);
-
-  if (!promptId || !buyerId) {
-    console.warn('Missing metadata on payment_intent.succeeded', { promptId, buyerId, intentId: intent.id });
-    return;
-  }
-
-  const prompt = await fetchPrompt(promptId);
-  if (!prompt) {
-    throw new Error(`Prompt ${promptId} not found`);
-  }
-
-  const sellerId =
-    readMetadata(intent.metadata, ['seller_id', 'sellerId']) ?? prompt.user_id ?? undefined;
-  const amount = centsToDollars(intent.amount_received ?? intent.amount ?? null);
-  const price = amount ?? (prompt.price !== null ? Number(prompt.price) : null);
-
-  const created = await ensurePurchase({
-    buyerId,
-    sellerId: sellerId || prompt.user_id || buyerId,
-    promptId: prompt.id,
-    price,
-  });
-
-  if (created) {
-    await creditSeller(sellerId ?? prompt.user_id, price);
-  }
-}
-
-async function handlePaymentIntentFailed(intent: Stripe.PaymentIntent) {
-  const promptId =
-    readMetadata(intent.metadata, ['prompt_id', 'promptId']) ??
-    (intent.metadata?.prompt as string | undefined) ??
-    null;
-  const buyerId = readMetadata(intent.metadata, ['user_id', 'buyer_id', 'buyerId', 'userId']);
-
-  console.error('Payment intent failed', {
-    intentId: intent.id,
-    promptId,
-    buyerId,
-    failureCode: intent.last_payment_error?.code,
-    failureMessage: intent.last_payment_error?.message,
-  });
-}
-
-async function handleTransferPaid(transfer: Stripe.Transfer) {
-  const accountId =
-    typeof transfer.destination === 'string'
-      ? transfer.destination
-      : transfer.destination?.id ?? null;
-  const sellerIdFromMetadata = readMetadata(transfer.metadata, [
-    'seller_id',
-    'user_id',
-    'owner_id',
-    'creator_id',
-  ]);
-  const sellerId = sellerIdFromMetadata ?? (await findSellerIdByAccount(accountId));
-
-  if (!sellerId) {
-  console.warn('transfer.created received but seller could not be resolved', {
+/**
+ * Handle transfer.created events
+ */
+async function handleTransferCreated(
+  supabase: any,
+  transfer: any,
+  requestId: string
+): Promise<void> {
+  try {
+    logger.info('Processing transfer.created', {
+      requestId,
       transferId: transfer.id,
-      accountId,
-    });
-    return;
-  }
+      amount: transfer.amount,
+      destination: transfer.destination,
+    }, 'TRANSFER_CREATED_START');
 
-  const amount = centsToDollars(transfer.amount ?? null);
-  const payload: Record<string, unknown> = {
-    seller_id: sellerId,
-    amount,
-    currency: transfer.currency,
-    stripe_transfer_id: transfer.id,
-    destination_account: accountId,
-    created_at: transfer.created ? new Date(transfer.created * 1000).toISOString() : new Date().toISOString(),
-  };
+    const { sellerId, accountId } = StripeWebhookHandler.validateTransferMetadata(transfer);
 
-  const { error } = await supabaseAdmin.from('payouts').insert(payload);
-  if (error) {
-    if (error.code === '23505') return;
-    throw new Error(error.message || 'Failed to record payout');
+    // If no seller ID in metadata, try to find by account ID
+    let finalSellerId = sellerId;
+    if (!finalSellerId && accountId) {
+      const { data: profile } = await supabase
+        .from('profiles')
+        .select('id')
+        .or(`stripe_account_id.eq.${accountId},connected_account_id.eq.${accountId}`)
+        .maybeSingle();
+
+      finalSellerId = profile?.id;
+    }
+
+    if (!finalSellerId) {
+      logger.warn('Could not resolve seller for transfer', {
+        requestId,
+        transferId: transfer.id,
+        accountId,
+        sellerId,
+      }, 'TRANSFER_SELLER_NOT_FOUND');
+      return;
+    }
+
+    // Create payout record
+    const payoutData: PayoutCreationData = {
+      sellerId: finalSellerId,
+      amount: StripeWebhookHandler.centsToDollars(transfer.amount),
+      currency: transfer.currency,
+      stripeTransferId: transfer.id,
+      destinationAccount: accountId,
+    };
+
+    const { created } = await webhookHandler.createPayout(supabase, payoutData);
+
+    if (created) {
+      logger.info('Payout created successfully', {
+        requestId,
+        sellerId: finalSellerId,
+        amount: payoutData.amount,
+        transferId: transfer.id,
+      }, 'PAYOUT_CREATED');
+    }
+
+  } catch (error) {
+    logger.error('Failed to process transfer', {
+      requestId,
+      transferId: transfer.id,
+    }, error as Error, 'TRANSFER_PROCESSING_FAILED');
+    
+    throw error;
   }
 }
 
-export async function POST(req: Request) {
-  const signature = req.headers.get('stripe-signature');
-  const rawBody = await req.text();
-
-  if (!signature) {
-    console.error('Missing Stripe signature header');
-    return NextResponse.json({ error: 'Missing signature' }, { status: 400 });
-  }
-
-  let event: Stripe.Event;
+/**
+ * Update seller credits atomically
+ */
+async function updateSellerCredits(
+  supabase: any,
+  sellerId: string,
+  amount: number,
+  requestId: string
+): Promise<void> {
   try {
-    event = stripe.webhooks.constructEvent(rawBody, signature, webhookSecret!);
-  } catch (err: any) {
-    console.error('Webhook signature verification failed', err?.message || err);
-    return NextResponse.json({ error: err?.message || 'Invalid signature' }, { status: 400 });
-  }
+    const { data: profile, error: profileError } = await supabase
+      .from('profiles')
+      .select('credits')
+      .eq('id', sellerId)
+      .single();
 
-  try {
-    if (await eventAlreadyProcessed(event.id)) {
-      return NextResponse.json({ received: true, duplicate: true }, { status: 200 });
+    if (profileError) {
+      throw new AppError('PROFILE_NOT_FOUND', `Seller profile ${sellerId} not found`, 404, {
+        details: profileError.message
+      });
     }
+
+    const currentCredits = Number(profile.credits ?? 0);
+    const newCredits = currentCredits + amount;
+
+    const { error: updateError } = await supabase
+      .from('profiles')
+      .update({ credits: newCredits })
+      .eq('id', sellerId);
+
+    if (updateError) {
+      throw new AppError('CREDIT_UPDATE_FAILED', 'Failed to update seller credits', 500, {
+        details: updateError.message
+      });
+    }
+
+    logger.info('Seller credits updated', {
+      requestId,
+      sellerId,
+      previousCredits: currentCredits,
+      addedAmount: amount,
+      newCredits,
+    }, 'CREDITS_UPDATED');
+
+  } catch (error) {
+    logger.error('Failed to update seller credits', {
+      requestId,
+      sellerId,
+      amount,
+    }, error as Error, 'CREDIT_UPDATE_FAILED');
+    
+    throw error;
+  }
+}
+
+/**
+ * Main webhook handler
+ */
+export async function POST(req: NextRequest) {
+  const requestId = crypto.randomUUID();
+  const startTime = Date.now();
+
+  try {
+    // Extract signature and raw body
+    const signature = req.headers.get('stripe-signature');
+    const rawBody = await req.text();
+
+    if (!signature) {
+      logger.error('Missing Stripe signature header', {
+        requestId,
+      }, new Error('Missing Stripe signature'), 'MISSING_SIGNATURE');
+      
+      return NextResponse.json(
+        { error: 'Missing Stripe signature' }, 
+        { status: 400 }
+      );
+    }
+
+    // Verify signature (this must happen before any DB operations)
+    const event = await webhookHandler.verifySignature(rawBody, signature);
+
+    // Initialize Supabase client for this request
+    const supabase = await createSupabaseServerClient();
+
+    // Check if event was already processed (idempotency)
+    if (await webhookHandler.isEventProcessed(supabase, event.id)) {
+      logger.info('Event already processed, skipping', {
+        requestId,
+        eventId: event.id,
+        eventType: event.type,
+      }, 'EVENT_ALREADY_PROCESSED');
+
+      return NextResponse.json({ 
+        received: true, 
+        duplicate: true,
+        requestId 
+      }, { status: 200 });
+    }
+
+    // Process the event
+    logger.info('Processing Stripe webhook event', {
+      requestId,
+      eventId: event.id,
+      eventType: event.type,
+      eventCreated: event.created,
+    }, 'WEBHOOK_EVENT_PROCESSING_START');
 
     switch (event.type) {
       case 'checkout.session.completed':
-        await handleCheckoutCompleted(event.data.object as Stripe.Checkout.Session);
+        await handleCheckoutCompleted(supabase, event.data.object, requestId);
         break;
+        
       case 'payment_intent.succeeded':
-        await handlePaymentIntentSucceeded(event.data.object as Stripe.PaymentIntent);
+        await handlePaymentIntentSucceeded(supabase, event.data.object, requestId);
         break;
+        
       case 'payment_intent.payment_failed':
-        await handlePaymentIntentFailed(event.data.object as Stripe.PaymentIntent);
+        await handlePaymentIntentFailed(supabase, event.data.object, requestId);
         break;
+        
       case 'transfer.created':
-        await handleTransferPaid(event.data.object as Stripe.Transfer);
+        await handleTransferCreated(supabase, event.data.object, requestId);
         break;
+        
       default:
+        logger.info('Unhandled event type', {
+          requestId,
+          eventType: event.type,
+          eventId: event.id,
+        }, 'UNHANDLED_EVENT_TYPE');
     }
 
-    await markEventProcessed(event);
-    return NextResponse.json({ received: true }, { status: 200 });
-  } catch (err: any) {
-    await logError(err, { scope: 'stripe_webhook', eventId: event?.id, type: event?.type });
-    console.error('Stripe webhook handler failed', err?.message || err);
-    return NextResponse.json({ error: err?.message || 'Webhook processing failed' }, { status: 400 });
+    // Mark event as processed (must be after successful processing)
+    await webhookHandler.markEventProcessed(supabase, event);
+
+    // Log business event
+    await BusinessEventLogger.logStripeWebhook(event.type, event.id, 'success');
+
+    const duration = Date.now() - startTime;
+    
+    logger.info('Webhook processed successfully', {
+      requestId,
+      eventId: event.id,
+      eventType: event.type,
+      duration,
+    }, 'WEBHOOK_PROCESSED_SUCCESS');
+
+    return NextResponse.json({ 
+      received: true,
+      requestId,
+      duration
+    }, { status: 200 });
+
+  } catch (error: any) {
+    const duration = Date.now() - startTime;
+    
+    // Log the error with full context
+    logger.error('Webhook processing failed', {
+      requestId,
+      duration,
+      errorType: error.constructor.name,
+      errorMessage: error.message,
+    }, error as Error, 'WEBHOOK_PROCESSING_FAILED');
+
+    // Determine response status code
+    let statusCode = 500;
+    let errorMessage = 'Webhook processing failed';
+
+    if (isOperationalError(error)) {
+      const appError = error as any;
+      statusCode = appError.statusCode || 500;
+      errorMessage = appError.message || 'Processing error';
+      
+      // Don't retry for client errors (4xx)
+      if (statusCode >= 400 && statusCode < 500) {
+        logger.warn('Client error in webhook, not retrying', {
+          requestId,
+          statusCode,
+          errorMessage,
+        }, 'CLIENT_ERROR_NO_RETRY');
+      }
+    }
+
+    // Log business event for failure
+    try {
+      await BusinessEventLogger.logStripeWebhook(
+        'unknown', // We don't know the event type if processing failed
+        'unknown',
+        'failed'
+      );
+    } catch (businessLogError) {
+      logger.error('Failed to log business event for webhook failure', {
+        requestId,
+      }, businessLogError as Error, 'BUSINESS_LOG_FAILED');
+    }
+
+    return NextResponse.json({ 
+      error: errorMessage,
+      requestId,
+      duration,
+      retry: statusCode >= 500 // Only retry on server errors
+    }, { status: statusCode });
   }
 }

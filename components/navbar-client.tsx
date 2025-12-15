@@ -5,7 +5,8 @@ import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 
 import { Button } from "@/components/ui/button";
-import { supabaseBrowser } from "@/lib/supabase-browser";
+
+import { createSupabaseBrowserClient } from "@/lib/supabase/client";
 
 type InitialUser = {
   id: string;
@@ -16,9 +17,13 @@ type Props = {
   initialUser: InitialUser;
 };
 
+
 export default function NavbarClient({ initialUser }: Props) {
   const [user, setUser] = useState(initialUser);
   const router = useRouter();
+  
+  // Create Supabase client instance
+  const supabase = createSupabaseBrowserClient();
 
   useEffect(() => {
     let active = true;
@@ -26,14 +31,14 @@ export default function NavbarClient({ initialUser }: Props) {
     const refreshUser = async () => {
       const {
         data: { user },
-      } = await supabaseBrowser.auth.getUser();
+      } = await supabase.auth.getUser();
       if (!active) return;
       setUser(user ? { id: user.id, email: user.email ?? null } : null);
     };
 
     void refreshUser();
 
-    const { data: listener } = supabaseBrowser.auth.onAuthStateChange((_event, session) => {
+    const { data: listener } = supabase.auth.onAuthStateChange((_event: any, session: any) => {
       if (!active) return;
       setUser(
         session?.user ? { id: session.user.id, email: session.user.email ?? null } : null
@@ -47,7 +52,7 @@ export default function NavbarClient({ initialUser }: Props) {
   }, []);
 
   const handleSignOut = async () => {
-    await supabaseBrowser.auth.signOut();
+    await supabase.auth.signOut();
     router.refresh();
   };
 
